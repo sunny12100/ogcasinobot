@@ -26,10 +26,10 @@ module.exports = {
           "Click the **Register** button below to link your Discord to your Territorial.io Account ID. \n\n" +
           "# 🛡️ Step 2: Verify & Deposit\n" +
           "To finish verification and add gold to your balance, send any amount to:\n" +
-          "```XZZWE```\n" +
+          "```AWwh_```\n" +
           "> **Note:** The bot scans for new transfers every 60 seconds. Your balance will update automatically once the transaction is detected.\n\n" +
           "### 📈 How to Update Balance\n" +
-          "Need more gold? Simply send another transfer to **XZZWE**. You do **not** need to click register again. The system tracks your username and adds the gold to your existing wallet instantly."
+          "Need more gold? Simply send another transfer to **AWwh_**. You do **not** need to click register again. The system tracks your username and adds the gold to your existing wallet instantly.",
       )
       .setColor(0x2ecc71)
       .setFooter({ text: "System Status: 🟢 Online & Tracking" })
@@ -39,7 +39,7 @@ module.exports = {
       new ButtonBuilder()
         .setCustomId("open_register_modal")
         .setLabel("Register")
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Success),
     );
 
     // --- 2. WITHDRAWAL PANEL ---
@@ -56,7 +56,7 @@ module.exports = {
           "> **Example:** If you withdraw 1,000 gold, you will receive 970 gold.\n\n" +
           "# ⚠️ Important Note\n" +
           "Withdrawals are processed manually by staff. Please allow up to 24 hours for the gold to arrive. \n\n" +
-          "**If you have not received your gold after 24 hours, please ping a <@930302959668056135> for assistance.**"
+          "**If you have not received your gold after 24 hours, please ping a <@930302959668056135> for assistance.**",
       )
       .setColor(0x3498db)
       .setFooter({
@@ -67,7 +67,7 @@ module.exports = {
       new ButtonBuilder()
         .setCustomId("open_withdraw_modal")
         .setLabel("Withdraw")
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Primary),
     );
 
     // Send them as separate messages

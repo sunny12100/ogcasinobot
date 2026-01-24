@@ -78,7 +78,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setCustomId("ttio_username")
           .setLabel("Territorial.io Account ID")
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder("Enter your exact game Account ID (Example : XZZWE)")
+          .setPlaceholder("Enter your exact game Account ID (Example : AWwh_)")
           .setRequired(true);
 
         modal.addComponents(
@@ -145,7 +145,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       await interaction.reply({
-        content: `✅ **Success!** Linked to **${ttioName}**.\nNow send gold to **XZZWE** in-game to verify.`,
+        content: `✅ **Success!** Linked to **${ttioName}**.\nNow send gold to **AWwh_** in-game to verify.`,
         ephemeral: true,
       });
     }

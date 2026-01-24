@@ -23,7 +23,7 @@ function startTracking(client) {
       for (const line of lines) {
         const [timeStr, sender, receiver, amountStr] = line.split(",");
 
-        if (receiver !== "XZZWE") continue;
+        if (receiver !== "AWwh_") continue;
 
         const txTime = parseInt(timeStr);
         const amount = parseFloat(amountStr);

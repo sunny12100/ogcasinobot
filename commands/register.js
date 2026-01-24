@@ -20,7 +20,7 @@ module.exports = {
       );
 
       await interaction.reply({
-        content: `✅ Registered as **${ttioName}**. Send gold to **XZZWE** in-game to verify your account!`,
+        content: `✅ Registered as **${ttioName}**. Send gold to **AWwh_** in-game to verify your account!`,
         ephemeral: true,
       });
     } catch (error) {
