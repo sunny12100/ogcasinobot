@@ -32,21 +32,6 @@ for (const file of commandFiles) {
 client.once(Events.ClientReady, () => {
   console.log(`✅ ${client.user.tag} is online!`);
   startTracking(client);
-  const fs = require("fs");
-  const path = require("path");
-
-  const backupData = {
-    USER_ID_1: { gold: 1000, verified: true },
-    USER_ID_2: { gold: 500, verified: true },
-    // Add all your users from your local users.json here
-  };
-
-  const DB_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH
-    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "users.json")
-    : "./users.json";
-
-  fs.writeFileSync(DB_PATH, JSON.stringify(backupData, null, 2));
-  console.log("🚀 Data migration complete!");
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
