@@ -5,8 +5,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
+const User = require("../models/User"); // Import your Mongoose model
 const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
 
 module.exports = {
   name: "aviator",
@@ -14,24 +14,26 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. STRICT VERIFICATION CHECK
-    const users = loadUsers();
-    if (!users[userId]) {
+    // 1. FETCH USER FROM MONGODB
+    const userData = await User.findOne({ userId });
+
+    if (!userData) {
       const errorMsg =
-        "❌ You are not verified! Please register in the casino-lobby first.";
+        "❌ You are not registered! Please register in the casino-lobby first.";
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: errorMsg, ephemeral: true })
         : interaction.reply({ content: errorMsg, ephemeral: true });
     }
 
-    if (users[userId].balance < amount) {
-      const errorMsg = `❌ Not enough gold! Balance: \`${users[userId].balance.toLocaleString()}\``;
+    if (userData.gold < amount) {
+      const errorMsg = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: errorMsg, ephemeral: true })
         : interaction.reply({ content: errorMsg, ephemeral: true });
     }
 
     // --- GAME LOGIC ---
+    // Standard Aviator logic: 10% chance of a high flight, otherwise lower crash points
     const crashPoint = Math.max(
       1,
       Math.random() * (Math.random() < 0.1 ? 10 : 3) + 0.1,
@@ -71,7 +73,6 @@ module.exports = {
         });
     };
 
-    // Handle initial reply or update from previous "Repeat" button
     const msg =
       interaction.replied || interaction.deferred
         ? await interaction.editReply({
@@ -89,6 +90,7 @@ module.exports = {
       time: 60000,
     });
 
+    // --- ANIMATION LOOP ---
     const gameLoop = setInterval(async () => {
       if (!gameActive) return clearInterval(gameLoop);
 
@@ -110,32 +112,33 @@ module.exports = {
     }, 1500);
 
     collector.on("collect", async (i) => {
-      if (i.user.id !== interaction.user.id)
+      if (i.user.id !== userId)
         return i.reply({ content: "Not your flight!", ephemeral: true });
 
       gameActive = false;
       clearInterval(gameLoop);
-      // Small "lag" compensation: reduce multiplier slightly on cashout
+      // Small "lag" compensation
       currentMultiplier = Math.max(1.0, currentMultiplier - 0.1);
       collector.stop("cashed_out");
-      await i.deferUpdate(); // Prevents "interaction failed" on button click
+      await i.deferUpdate();
     });
 
     collector.on("end", async (_, reason) => {
-      const freshUsers = loadUsers();
+      // 2. RE-FETCH USER TO ENSURE UP-TO-DATE BALANCE BEFORE SAVING
+      const freshUserData = await User.findOne({ userId });
       let netChange = 0;
 
       if (reason === "cashed_out") {
         const winAmount = Math.floor(amount * currentMultiplier);
         netChange = winAmount - amount;
-        freshUsers[userId].balance += netChange;
       } else {
         netChange = -amount;
-        freshUsers[userId].balance += netChange;
       }
 
-      saveUsers(freshUsers);
+      freshUserData.gold += netChange;
+      await freshUserData.save();
 
+      // LOG TO AUDIT
       await logToAudit(interaction.client, {
         userId,
         amount: netChange,
@@ -151,15 +154,14 @@ module.exports = {
         .setDescription(
           `${reason === "cashed_out" ? `💵 **Exited at \`${currentMultiplier.toFixed(2)}x\`**` : `💥 **Crashed at \`${crashPoint}x\`**`}\n\n` +
             `**Net Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
-            `**Balance:** \`${freshUsers[userId].balance.toLocaleString()}\``,
+            `**New Balance:** \`${freshUserData.gold.toLocaleString()}\``,
         )
         .setThumbnail(
           reason === "cashed_out"
-            ? "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2J4bjdjbjNrYjl2bWc4b2N2c3RjZnZzaWhmdWRoZGd4cWdtd2x2NyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/h0MTqLyvgG0Ss/giphy.gif"
+            ? "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2J4bjdjbjNrYjl2mWc4b2N2c3RjZnZzaWhmdWRoZGd4cWdtd2x2NyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/h0MTqLyvgG0Ss/giphy.gif"
             : "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanN5ZHNpZ2RxZm4zanR0NDdjMGo2cmNnZ290emp0N3lxandqbGFiOCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/oe33xf3B50fsc/giphy.gif",
         );
 
-      // --- ADD REPEAT BUTTONS ---
       const endRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`aviator_repeat_${amount}`)
@@ -177,25 +179,20 @@ module.exports = {
         components: [endRow],
       });
 
-      // --- SECOND COLLECTOR FOR THE REPEAT ACTION ---
       const repeatCollector = finalMsg.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: 15000,
       });
 
       repeatCollector.on("collect", async (btnInt) => {
-        if (btnInt.user.id !== interaction.user.id) return;
-
+        if (btnInt.user.id !== userId) return;
         if (btnInt.customId.startsWith("aviator_repeat_")) {
           await btnInt.deferUpdate();
           repeatCollector.stop();
-          return this.execute(btnInt, amount); // Recursive call
+          return this.execute(btnInt, amount);
         }
-
-        if (btnInt.customId === "aviator_quit") {
-          await btnInt.update({ components: [] });
-          repeatCollector.stop();
-        }
+        await btnInt.update({ components: [] });
+        repeatCollector.stop();
       });
 
       repeatCollector.on("end", (collected, reason) => {

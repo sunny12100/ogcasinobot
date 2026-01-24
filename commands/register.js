@@ -1,24 +1,35 @@
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User"); // Import the Mongoose model
 
 module.exports = {
   name: "register",
   async execute(interaction) {
-    const users = loadUsers();
     const ttioName = interaction.options.getString("username");
     const now = Date.now();
 
-    users[interaction.user.id] = {
-      ttio: ttioName,
-      verified: false,
-      balance: users[interaction.user.id]?.balance || 0,
-      registered_at: now,
-      latest_tx_time: now,
-    };
+    try {
+      // MONGODB: Find the user by ID.
+      // If they exist, update ttio name. If not, create them (upsert).
+      await User.findOneAndUpdate(
+        { userId: interaction.user.id },
+        {
+          ttio: ttioName,
+          // We don't touch 'gold' or 'verified' here so we don't reset their progress
+          registeredAt: now,
+        },
+        { upsert: true, new: true },
+      );
 
-    saveUsers(users);
-    await interaction.reply({
-      content: `✅ Registered as **${ttioName}**. Send gold to **XZZWE** to verify!`,
-      ephemeral: true,
-    });
+      await interaction.reply({
+        content: `✅ Registered as **${ttioName}**. Send gold to **XZZWE** in-game to verify your account!`,
+        ephemeral: true,
+      });
+    } catch (error) {
+      console.error("Registration Error:", error);
+      await interaction.reply({
+        content:
+          "❌ There was an error saving your registration. Please try again later.",
+        ephemeral: true,
+      });
+    }
   },
 };

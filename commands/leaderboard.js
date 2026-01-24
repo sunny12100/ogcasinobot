@@ -5,19 +5,15 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const { loadUsers } = require("../utils/db");
+const User = require("../models/User"); // Import your Mongoose model
 
 module.exports = {
   name: "leaderboard",
   async execute(interaction) {
-    const users = loadUsers();
+    // 1. FETCH ALL USERS SORTED BY GOLD (DESCENDING)
+    const allUsers = await User.find({}).sort({ gold: -1 });
 
-    // Sort all verified users by balance
-    const allUsers = Object.entries(users)
-      .map(([id, data]) => ({ id, balance: data.balance }))
-      .sort((a, b) => b.balance - a.balance);
-
-    if (allUsers.length === 0) {
+    if (!allUsers || allUsers.length === 0) {
       return interaction.reply("The vault is empty! No one has any gold yet.");
     }
 
@@ -40,11 +36,14 @@ module.exports = {
           else if (rank === 3) medal = "🥉 ";
           else medal = `\`#${rank}\` `;
 
-          return `${medal} <@${user.id}> — **${user.balance.toLocaleString()}** gold`;
+          return `${medal} <@${user.userId}> — **${user.gold.toLocaleString()}** gold`;
         })
         .join("\n");
 
-      const userIndex = allUsers.findIndex((u) => u.id === interaction.user.id);
+      // Find the interaction user's rank
+      const userIndex = allUsers.findIndex(
+        (u) => u.userId === interaction.user.id,
+      );
       const userRankText = userIndex === -1 ? "Unranked" : `#${userIndex + 1}`;
 
       return new EmbedBuilder()
@@ -87,7 +86,7 @@ module.exports = {
     // Create collector for button interaction
     const collector = response.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 60000, // Active for 1 minute
+      time: 60000,
     });
 
     collector.on("collect", async (i) => {
@@ -107,7 +106,6 @@ module.exports = {
       });
     });
 
-    // Remove buttons when collector expires
     collector.on("end", () => {
       interaction.editReply({ components: [] }).catch(() => null);
     });

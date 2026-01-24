@@ -1,9 +1,10 @@
 const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
-const { loadUsers } = require("../utils/db");
+const User = require("../models/User"); // Your Mongoose model
 
 module.exports = {
   name: "stats",
   async execute(interaction) {
+    // 1. ADMIN CHECK
     if (
       !interaction.member.permissions.has(PermissionFlagsBits.Administrator)
     ) {
@@ -13,44 +14,42 @@ module.exports = {
       });
     }
 
-    const users = loadUsers();
-    const userEntries = Object.entries(users);
-    const totalUsers = userEntries.length;
+    // 2. FETCH ALL USERS (Sorted for Median)
+    const allUsers = await User.find({}).sort({ gold: 1 });
+    const totalUsers = allUsers.length;
 
-    if (totalUsers === 0)
-      return interaction.reply("📊 No verified users found.");
+    if (totalUsers === 0) {
+      return interaction.reply("📊 No registered users found in the database.");
+    }
 
-    const STARTING_GOLD = 500; // Adjust this to your actual starting gold amount
+    // 3. AGGREGATE STATS
+    const STARTING_GOLD = 500;
     let totalGold = 0;
-    const balances = [];
-    let richest = { id: "", balance: -1 };
-
-    // Updated Brackets
     let brokeCount = 0; // < 100
     let mediumCount = 0; // 100 - 1,000
     let eliteCount = 0; // 1,001 - 10,000
     let richCount = 0; // > 10,000
 
-    for (const [id, data] of userEntries) {
-      const bal = data.balance;
+    const balances = allUsers.map((u) => {
+      const bal = u.gold;
       totalGold += bal;
-      balances.push(bal);
 
-      if (bal > richest.balance) richest = { id, balance: bal };
-
+      // Categorize
       if (bal < 100) brokeCount++;
       else if (bal <= 1000) mediumCount++;
       else if (bal <= 10000) eliteCount++;
       else richCount++;
-    }
 
-    // Calculations
+      return bal;
+    });
+
+    // 4. CALCULATIONS
     const avgBalance = Math.floor(totalGold / totalUsers);
     const totalInjected = totalUsers * STARTING_GOLD;
     const netHouseProfit = totalInjected - totalGold;
+    const richest = allUsers[totalUsers - 1]; // Last element due to sort
 
-    // Median
-    balances.sort((a, b) => a - b);
+    // Median Logic
     const median =
       totalUsers % 2 === 0
         ? (balances[totalUsers / 2 - 1] + balances[totalUsers / 2]) / 2
@@ -63,7 +62,7 @@ module.exports = {
         "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbnI2Z254b3dzNjhzemtnZndiZDBqcmxhZGtxaHIzdmhoMXU1cXp3dSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/GWS8bXKxphfEI/giphy.gif",
       )
       .setDescription(
-        `**Economy Overview**\n` +
+        `**Economy Overview (Cloud Mode)**\n` +
           `The House has a net profit/loss of \`${netHouseProfit.toLocaleString()}\` gold relative to starting balances.`,
       )
       .addFields(
@@ -83,8 +82,8 @@ module.exports = {
         },
         {
           name: "🐳 TOP WHALE",
-          value: richest.id
-            ? `<@${richest.id}>\nBalance: \`${richest.balance.toLocaleString()}\``
+          value: richest
+            ? `<@${richest.userId}>\nBalance: \`${richest.gold.toLocaleString()}\``
             : "None",
           inline: true,
         },

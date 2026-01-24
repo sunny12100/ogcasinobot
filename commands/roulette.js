@@ -6,8 +6,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User"); // Import your MongoDB model
+const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
 
 module.exports = {
   name: "roulette",
@@ -15,18 +15,20 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. STRICT VERIFICATION CHECK
-    const users = loadUsers();
-    if (!users[userId]) {
+    // 1. FETCH USER FROM MONGODB
+    const userData = await User.findOne({ userId });
+
+    if (!userData) {
       const err =
-        "❌ You are not verified! Please register in the casino-lobby first.";
+        "❌ You are not registered! Please use the registration panel first.";
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
     }
 
-    if (users[userId].balance < amount) {
-      const err = `❌ Not enough gold! Balance: \`${users[userId].balance.toLocaleString()}\``;
+    // 2. CHECK BALANCE
+    if (userData.gold < amount) {
+      const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
@@ -148,17 +150,17 @@ module.exports = {
           multiplier = 18;
         }
 
-        const freshUsers = loadUsers();
+        // 3. UPDATE MONGODB
         const netChange = won ? amount * multiplier - amount : -amount;
-        freshUsers[userId].balance += netChange;
-        saveUsers(freshUsers);
+        userData.gold += netChange;
+        await userData.save();
 
-        // LOG TO AUDIT
+        // ✅ 4. LOG TO AUDIT
         await logToAudit(interaction.client, {
           userId,
           amount: netChange,
-          reason: `Roulette: ${space} (Landed ${resultText} ${resultColor})`,
-        });
+          reason: `Roulette: ${space.toUpperCase()} (Ball: ${resultText} ${resultColor.toUpperCase()})`,
+        }).catch((err) => console.error("Logger Error (Roulette):", err));
 
         const resultEmbed = new EmbedBuilder()
           .setTitle(won ? "✨ WINNER ✨" : "💀 HOUSE WINS")
@@ -172,11 +174,10 @@ module.exports = {
             `### The ball landed on: **${resultText} ${resultColor.toUpperCase()}**\n` +
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
               `💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
-              `🏦 **Balance:** \`${freshUsers[userId].balance.toLocaleString()}\` gold\n` +
+              `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold\n` +
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
           );
 
-        // --- REPEAT BUTTONS ---
         const repeatRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`roulette_repeat_${amount}`)
@@ -188,12 +189,12 @@ module.exports = {
             .setStyle(ButtonStyle.Secondary),
         );
 
-        const finalMsg = await interaction.editReply({
+        await interaction.editReply({
           embeds: [resultEmbed],
           components: [repeatRow],
         });
 
-        const repeatCollector = finalMsg.createMessageComponentCollector({
+        const repeatCollector = response.createMessageComponentCollector({
           componentType: ComponentType.Button,
           time: 15000,
         });

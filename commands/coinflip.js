@@ -5,8 +5,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User"); // Import your Mongoose model
+const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
 
 module.exports = {
   name: "coinflip",
@@ -14,18 +14,20 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. STRICT VERIFICATION CHECK
-    const users = loadUsers();
-    if (!users[userId]) {
+    // 1. FETCH USER FROM MONGODB
+    const userData = await User.findOne({ userId });
+
+    if (!userData) {
       const err =
-        "❌ You are not verified! Please register in the casino-lobby first.";
+        "❌ You are not registered! Please use the registration panel first.";
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
     }
 
-    if (users[userId].balance < amount) {
-      const err = `❌ Not enough gold! Balance: \`${users[userId].balance.toLocaleString()}\``;
+    // 2. CHECK BALANCE
+    if (userData.gold < amount) {
+      const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
@@ -88,7 +90,7 @@ module.exports = {
       await i.update({ embeds: [flippingEmbed], components: [] });
 
       setTimeout(async () => {
-        // 45% win chance as per your original logic
+        // 45% win chance
         const winProbability = 0.45;
         const won = Math.random() < winProbability;
         const resultSide = won
@@ -97,17 +99,17 @@ module.exports = {
             ? "tails"
             : "heads";
 
-        const freshUsers = loadUsers();
+        // 3. UPDATE MONGODB
         const netChange = won ? amount : -amount;
-        freshUsers[userId].balance += netChange;
-        saveUsers(freshUsers);
+        userData.gold += netChange;
+        await userData.save();
 
-        // LOG TO AUDIT
+        // ✅ 4. LOG TO AUDIT
         await logToAudit(interaction.client, {
           userId,
           amount: netChange,
-          reason: `Coinflip (${choice} vs ${resultSide})`,
-        });
+          reason: `Coinflip: ${choice.toUpperCase()} (${won ? "Won" : "Lost"})`,
+        }).catch((err) => console.error("Logger Error (Coinflip):", err));
 
         const resultEmbed = new EmbedBuilder()
           .setTitle(won ? "🎉 WINNER!" : "💀 LOST")
@@ -122,11 +124,10 @@ module.exports = {
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
               `You chose **${choice.toUpperCase()}** and **${won ? "won!" : "lost."}**\n\n` +
               `💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
-              `🏦 **Balance:** \`${freshUsers[userId].balance.toLocaleString()}\` gold\n` +
+              `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold\n` +
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
           );
 
-        // --- REPEAT BUTTONS ---
         const repeatRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`cf_repeat_${amount}`)

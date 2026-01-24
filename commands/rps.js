@@ -5,43 +5,45 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
+const User = require("../models/User"); // Import Mongoose model
 const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
 
 module.exports = {
-  name: "rps", // This is the key that matches your index.js loader
+  name: "rps",
   async execute(interaction, repeatAmount = null) {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const challengerId = interaction.user.id;
     const opponent = interaction.options.getUser("opponent");
 
     // 1. DATABASE & VERIFICATION CHECKS
-    const users = loadUsers();
+    const challengerData = await User.findOne({ userId: challengerId });
+    const opponentData = await User.findOne({ userId: opponent?.id });
 
-    // Check Challenger
-    if (!users[challengerId] || !users[challengerId].verified) {
+    // Check Challenger registration
+    if (!challengerData) {
       return interaction.reply({
         content:
-          "❌ You are not verified! Please register and verify in the casino-lobby first.",
+          "❌ You are not registered! Please register in the casino-lobby first.",
         ephemeral: true,
       });
     }
 
-    // Check Opponent
-    if (!opponent || !users[opponent.id] || !users[opponent.id].verified) {
+    // Check Opponent registration
+    if (!opponentData) {
       return interaction.reply({
-        content: "❌ Your opponent is not a verified player!",
+        content: "❌ Your opponent is not a registered player!",
         ephemeral: true,
       });
     }
 
-    // Logic Checks
+    // Validation: Self and Bots
     if (opponent.id === challengerId) {
       return interaction.reply({
         content: "❌ You cannot challenge yourself!",
         ephemeral: true,
       });
     }
+
     if (opponent.bot) {
       return interaction.reply({
         content: "❌ You cannot challenge bots!",
@@ -50,13 +52,13 @@ module.exports = {
     }
 
     // Balance Checks
-    if (users[challengerId].balance < amount) {
+    if (challengerData.gold < amount) {
       return interaction.reply({
-        content: `❌ You don't have enough gold! Balance: \`${users[challengerId].balance.toLocaleString()}\``,
+        content: `❌ You don't have enough gold! Balance: \`${challengerData.gold.toLocaleString()}\``,
         ephemeral: true,
       });
     }
-    if (users[opponent.id].balance < amount) {
+    if (opponentData.gold < amount) {
       return interaction.reply({
         content: `❌ Your opponent doesn't have enough gold for this bet!`,
         ephemeral: true,
@@ -91,7 +93,6 @@ module.exports = {
       fetchReply: true,
     });
 
-    // Invite Collector (Only the opponent can answer)
     const inviteCollector = response.createMessageComponentCollector({
       filter: (i) => i.user.id === opponent.id,
       time: 30000,
@@ -133,7 +134,7 @@ module.exports = {
         .setDescription(
           `**Bet:** \`${amount.toLocaleString()}\` gold\n` +
             `**Players:** <@${challengerId}> vs <@${opponent.id}>\n\n` +
-            `*Select your move below! Your choice will remain hidden until both players have picked.*`,
+            `*Select your move! Choices are hidden until both players pick.*`,
         );
 
       await i.update({
@@ -156,10 +157,7 @@ module.exports = {
           });
         }
         if (choices[bi.user.id]) {
-          return bi.reply({
-            content: "You already locked in your move!",
-            ephemeral: true,
-          });
+          return bi.reply({ content: "You already picked!", ephemeral: true });
         }
 
         choices[bi.user.id] = bi.customId;
@@ -185,21 +183,15 @@ module.exports = {
         // 4. RESOLUTION
         const p1 = choices[challengerId];
         const p2 = choices[opponent.id];
-        let winnerId = null;
+        let winnerId =
+          p1 === p2
+            ? "tie"
+            : (p1 === "rock" && p2 === "scissors") ||
+                (p1 === "paper" && p2 === "rock") ||
+                (p1 === "scissors" && p2 === "paper")
+              ? challengerId
+              : opponent.id;
 
-        if (p1 === p2) {
-          winnerId = "tie";
-        } else if (
-          (p1 === "rock" && p2 === "scissors") ||
-          (p1 === "paper" && p2 === "rock") ||
-          (p1 === "scissors" && p2 === "paper")
-        ) {
-          winnerId = challengerId;
-        } else {
-          winnerId = opponent.id;
-        }
-
-        const freshUsers = loadUsers();
         let resultText = "";
 
         if (winnerId === "tie") {
@@ -208,19 +200,35 @@ module.exports = {
           const loserId =
             winnerId === challengerId ? opponent.id : challengerId;
 
-          // Move the gold
-          freshUsers[winnerId].balance += amount;
-          freshUsers[loserId].balance -= amount;
-          saveUsers(freshUsers);
+          // FETCH FRESH DATA: Prevent gold dupe/spending glitches during the 60s window
+          const winUser = await User.findOne({ userId: winnerId });
+          const loseUser = await User.findOne({ userId: loserId });
+
+          // Final balance validation
+          if (loseUser.gold < amount) {
+            return interaction.editReply({
+              content:
+                "❌ Error: The loser no longer has enough gold to cover the bet!",
+              embeds: [],
+              components: [],
+            });
+          }
+
+          winUser.gold += amount;
+          loseUser.gold -= amount;
+
+          await winUser.save();
+          await loseUser.save();
 
           resultText = `🏆 <@${winnerId}> **WON!**\n💰 They won **${amount.toLocaleString()}** gold from <@${loserId}>!`;
 
-          // Log to Audit (Matches your logger structure)
+          // ✅ LOG TO AUDIT
           await logToAudit(interaction.client, {
             userId: winnerId,
+            adminId: loserId, // The "source" of the gold
             amount: amount,
-            reason: `Won RPS PVP vs ${loserId}`,
-          });
+            reason: `PVP RPS: ${winnerId} beat ${loserId} (${p1} vs ${p2})`,
+          }).catch((err) => console.error("Logger Error (RPS):", err));
         }
 
         const finalEmbed = new EmbedBuilder()
@@ -233,7 +241,6 @@ module.exports = {
           )
           .setTimestamp();
 
-        // Clear buttons and update with results
         await interaction.editReply({
           content: " ",
           embeds: [finalEmbed],

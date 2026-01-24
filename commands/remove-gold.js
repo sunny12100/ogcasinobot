@@ -1,5 +1,5 @@
-const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
-const { loadUsers, saveUsers } = require("../utils/db");
+const { EmbedBuilder } = require("discord.js");
+const User = require("../models/User"); // Import Mongoose model
 const { logToAudit } = require("../utils/logger");
 
 module.exports = {
@@ -7,22 +7,27 @@ module.exports = {
   async execute(interaction) {
     const target = interaction.options.getUser("user");
     const amount = interaction.options.getInteger("amount");
-    const users = loadUsers();
 
-    // ERROR THROW: Check if user is verified/registered
-    if (!users[target.id]) {
+    // 1. FETCH TARGET USER FROM MONGODB
+    const userData = await User.findOne({ userId: target.id });
+
+    // ERROR THROW: Check if user exists in the cloud DB
+    if (!userData) {
       return interaction.reply({
-        content: `❌ **Error:** Cannot remove gold. <@${target.id}> does not have a verified casino account.`,
+        content: `❌ **Error:** Cannot remove gold. <@${target.id}> does not have a registered casino account.`,
         ephemeral: true,
       });
     }
 
-    const oldBalance = users[target.id].balance;
-    users[target.id].balance = Math.max(0, users[target.id].balance - amount);
-    const actualRemoved = oldBalance - users[target.id].balance;
+    // 2. CALCULATE REMOVAL (Preventing negative balance)
+    const oldBalance = userData.gold;
+    userData.gold = Math.max(0, userData.gold - amount);
+    const actualRemoved = oldBalance - userData.gold;
 
-    saveUsers(users);
+    // 3. SAVE UPDATED BALANCE TO ATLAS
+    await userData.save();
 
+    // 4. LOG TO AUDIT
     await logToAudit(interaction.client, {
       userId: target.id,
       adminId: interaction.user.id,
@@ -33,7 +38,8 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setTitle("💸 GOLD VOIDED")
       .setColor(0xe74c3c)
-      .setDescription(`Removed gold from ${target}.`)
+      .setThumbnail(target.displayAvatarURL())
+      .setDescription(`Successfully updated the vaults for ${target}.`)
       .addFields(
         {
           name: "Amount Removed",
@@ -42,10 +48,12 @@ module.exports = {
         },
         {
           name: "Current Balance",
-          value: `\`${users[target.id].balance.toLocaleString()}\` gold`,
+          value: `\`${userData.gold.toLocaleString()}\` gold`,
           inline: true,
         },
-      );
+      )
+      .setFooter({ text: "Admin Action Logged" })
+      .setTimestamp();
 
     await interaction.reply({ embeds: [embed] });
   },

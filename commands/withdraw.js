@@ -1,36 +1,57 @@
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User"); // Import your MongoDB model
 
 module.exports = {
   name: "withdraw",
   async execute(interaction) {
+    // 1. Defer because database lookups take a second
     await interaction.deferReply({ ephemeral: true });
-    const users = loadUsers();
+
     const amount = interaction.options.getInteger("amount");
-    const userData = users[interaction.user.id];
-    const target = interaction.options.getString("account") || userData?.ttio;
+    const customAccount = interaction.options.getString("account");
 
-    if (!userData || !userData.verified)
-      return interaction.editReply("❌ You must be verified.");
-    if (userData.balance < amount)
-      return interaction.editReply("❌ Not enough gold.");
+    // 2. Fetch User from MongoDB
+    const userData = await User.findOne({ userId: interaction.user.id });
 
-    const fee = Math.ceil(amount * 0.05);
-    userData.balance -= amount;
-    saveUsers(users);
+    // 3. Validation Checks
+    if (!userData || !userData.verified) {
+      return interaction.editReply("❌ You must be verified to withdraw gold.");
+    }
 
-    const logChannel = interaction.client.channels.cache.get(
-      process.env.LOG_CHANNEL_ID
-    );
-    if (logChannel) {
-      logChannel.send(
-        `🚨 **Withdrawal:** <@${interaction.user.id}> wants ${
-          amount - fee
-        } gold to **${target}**.`
+    if (userData.gold < amount) {
+      return interaction.editReply(
+        `❌ Insufficient gold! You only have **${userData.gold.toLocaleString()}**.`,
       );
     }
 
+    const target = customAccount || userData.ttio;
+
+    // 4. Calculate Payout (5% fee in this version)
+    const fee = Math.ceil(amount * 0.05);
+    const finalAmount = amount - fee;
+
+    // 5. Update Database Atomically
+    userData.gold -= amount;
+    await userData.save();
+
+    // 6. Log for Admins
+    const logChannelId = process.env.LOG_CHANNEL_ID;
+    const logChannel = interaction.client.channels.cache.get(logChannelId);
+
+    if (logChannel) {
+      await logChannel.send({
+        content:
+          `🚨 **NEW WITHDRAWAL REQUEST**\n` +
+          `👤 **User:** <@${interaction.user.id}>\n` +
+          `💰 **Total:** ${amount.toLocaleString()}\n` +
+          `📉 **Fee (5%):** -${fee.toLocaleString()}\n` +
+          `🎁 **Payout:** **${finalAmount.toLocaleString()}**\n` +
+          `🎮 **Destination Account:** \`${target}\``,
+      });
+    }
+
+    // 7. Success Message
     await interaction.editReply(
-      `✅ Request sent! You will receive **${amount - fee}** gold.`
+      `✅ **Request Sent!** Deducted **${amount.toLocaleString()}** gold from your vault. You will receive **${finalAmount.toLocaleString()}** gold at \`${target}\` shortly.`,
     );
   },
 };

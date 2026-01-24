@@ -5,8 +5,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User"); // Import Mongoose model
+const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
 
 module.exports = {
   name: "highlow",
@@ -14,18 +14,19 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. STRICT VERIFICATION CHECK
-    const users = loadUsers();
-    if (!users[userId]) {
+    // 1. FETCH USER FROM MONGODB
+    const userData = await User.findOne({ userId });
+
+    if (!userData) {
       const err =
-        "❌ You are not verified! Please register in the casino-lobby first.";
+        "❌ You are not registered! Please use the registration panel first.";
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
     }
 
-    if (users[userId].balance < amount) {
-      const err = `❌ Not enough gold! Balance: \`${users[userId].balance.toLocaleString()}\``;
+    if (userData.gold < amount) {
+      const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
@@ -47,7 +48,6 @@ module.exports = {
       "K",
       "A",
     ];
-    // Draw dealer card (excluding extreme ends to make it playable)
     const dealerIndex = Math.floor(Math.random() * (cards.length - 2)) + 1;
     const dealerCard = cards[dealerIndex];
 
@@ -100,7 +100,6 @@ module.exports = {
         return i.reply({ content: "Not your game!", ephemeral: true });
 
       const choice = i.customId;
-
       const shufflingEmbed = new EmbedBuilder()
         .setTitle("🃏 SHUFFLING...")
         .setColor(0xffaa00)
@@ -127,7 +126,6 @@ module.exports = {
             userIndex = Math.floor(Math.random() * dealerIndex);
           }
         } else {
-          // Force a loss or tie
           if (choice === "higher")
             userIndex = Math.floor(Math.random() * (dealerIndex + 1));
           else
@@ -141,16 +139,17 @@ module.exports = {
           (choice === "higher" && userIndex > dealerIndex) ||
           (choice === "lower" && userIndex < dealerIndex);
 
-        const freshUsers = loadUsers();
+        // 2. UPDATE MONGODB BALANCE
         const netChange = won ? amount : -amount;
-        freshUsers[userId].balance += netChange;
-        saveUsers(freshUsers);
+        userData.gold += netChange;
+        await userData.save();
 
+        // ✅ 3. LOG TO AUDIT
         await logToAudit(interaction.client, {
           userId,
           amount: netChange,
-          reason: `HighLow: Dealer ${dealerCard} vs User ${userCard}`,
-        });
+          reason: `High-Low: ${choice.toUpperCase()} (Dealer: ${dealerCard} vs You: ${userCard})`,
+        }).catch((err) => console.error("Logger Error (HighLow):", err));
 
         const resultEmbed = new EmbedBuilder()
           .setTitle(won ? "🎉 CORRECT!" : "💀 WRONG")
@@ -165,7 +164,7 @@ module.exports = {
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
               `Result: You chose **${choice.toUpperCase()}** and were **${won ? "Right" : "Wrong"}**!\n\n` +
               `💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
-              `🏦 **Balance:** \`${freshUsers[userId].balance.toLocaleString()}\` gold\n` +
+              `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold\n` +
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
           );
 
@@ -200,7 +199,7 @@ module.exports = {
           await btn.update({ components: [] });
           repeatCollector.stop();
         });
-      }, 3000); // Reduced from 5s to 3s for a snappier game feel
+      }, 3000);
       collector.stop();
     });
   },

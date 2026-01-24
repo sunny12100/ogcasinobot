@@ -1,45 +1,49 @@
 const { EmbedBuilder } = require("discord.js");
-const { loadUsers } = require("../utils/db");
+const User = require("../models/User"); // Import the Mongoose model
 
 module.exports = {
   name: "balance",
   async execute(interaction) {
-    // 1. Get the target user (if provided), otherwise use the command runner
+    // 1. Get the target user
     const targetUser = interaction.options.getUser("user") || interaction.user;
-    const users = loadUsers();
-    const userData = users[targetUser.id];
 
-    // 2. Verification Check
+    // 2. Fetch User Data from MongoDB
+    const userData = await User.findOne({ userId: targetUser.id });
+
+    // 3. Verification Check
     if (!userData) {
       return interaction.reply({
         content: `❌ **${targetUser.username}** is not a registered member of the OG Casino.`,
-        ephemeral: false, // Set to false so everyone sees the error/shame
+        ephemeral: false,
       });
     }
 
-    // 3. Calculate Rank
-    // Convert the users object to an array, sort by balance descending
-    const leaderboard = Object.entries(users)
-      .map(([id, data]) => ({ id, balance: data.balance }))
-      .sort((a, b) => b.balance - a.balance);
+    // 4. Calculate Rank & Stats efficiently
+    // We count how many users have MORE gold than this user to find their rank
+    const rankIndex =
+      (await User.countDocuments({ gold: { $gt: userData.gold } })) + 1;
+    const totalUsers = await User.countDocuments();
 
-    const rankIndex = leaderboard.findIndex((u) => u.id === targetUser.id) + 1;
-
-    // 4. Create the Public Embed
+    // 5. Create the Embed
     const embed = new EmbedBuilder()
       .setTitle(`💰 VAULT: ${targetUser.username.toUpperCase()}`)
       .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-      .setColor(rankIndex === 1 ? 0xffd700 : 0x5865f2) // Gold color for #1
+      .setColor(rankIndex === 1 ? 0xffd700 : 0x5865f2)
       .addFields(
         {
           name: "💵 Current Balance",
-          value: `\`${userData.balance.toLocaleString()}\` Gold`,
+          value: `\`${userData.gold.toLocaleString()}\` Gold`,
           inline: true,
         },
         {
           name: "🏆 Global Rank",
-          value: `#${rankIndex} of ${leaderboard.length}`,
+          value: `#${rankIndex} of ${totalUsers}`,
           inline: true,
+        },
+        {
+          name: "🎮 Linked ID",
+          value: `\`${userData.ttio || "Not Linked"}\``,
+          inline: false,
         },
       )
       .setDescription(
@@ -47,10 +51,10 @@ module.exports = {
           ? "👑 **The current King of the Casino!**"
           : `Keep playing to climb the leaderboard.`,
       )
-      .setFooter({ text: "OG Casino • Public Ledger" })
+      .setFooter({ text: "OG Casino • Live Cloud Ledger" })
       .setTimestamp();
 
-    // 5. Public Reply
+    // 6. Public Reply
     await interaction.reply({ embeds: [embed] });
   },
 };

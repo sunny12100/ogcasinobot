@@ -5,8 +5,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User"); // Import your Mongoose model
+const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
 
 module.exports = {
   name: "dice",
@@ -14,18 +14,19 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. STRICT VERIFICATION CHECK
-    const users = loadUsers();
-    if (!users[userId]) {
+    // 1. FETCH USER FROM MONGODB
+    const userData = await User.findOne({ userId });
+
+    if (!userData) {
       const err =
-        "❌ You are not verified! Please register in the casino-lobby first.";
+        "❌ You are not registered! Please use the registration panel first.";
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
     }
 
-    if (users[userId].balance < amount) {
-      const err = `❌ Not enough gold! Balance: \`${users[userId].balance.toLocaleString()}\``;
+    if (userData.gold < amount) {
+      const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
@@ -70,7 +71,7 @@ module.exports = {
       .setDescription(
         `👤 **Player:** <@${userId}>\n` +
           `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\n` +
-          `Dealer rolled: **${diceEmojis[dealerRoll]} (${dealerRoll})**\n` +
+          `Dealer rolled: **${diceEmojis[dealerRoll] || "🎲🎲"} (${dealerRoll})**\n` +
           `Will the next roll be **Higher** or **Lower**?`,
       );
 
@@ -96,7 +97,6 @@ module.exports = {
         return i.reply({ content: "Not your game!", ephemeral: true });
 
       const choice = i.customId;
-
       const rollingEmbed = new EmbedBuilder()
         .setTitle("🎲 ROLLING...")
         .setColor(0xffaa00)
@@ -111,7 +111,7 @@ module.exports = {
         const isLucky = Math.random() < 0.45; // 45% win probability
         let userRoll;
 
-        // Forced Outcome Logic for House Edge
+        // House Edge Logic
         if (isLucky) {
           if (choice === "higher" && dealerRoll < 12)
             userRoll =
@@ -131,16 +131,17 @@ module.exports = {
           (choice === "higher" && userRoll > dealerRoll) ||
           (choice === "lower" && userRoll < dealerRoll);
 
-        const freshUsers = loadUsers();
+        // 2. UPDATE MONGODB
         const netChange = actuallyWon ? amount : -amount;
-        freshUsers[userId].balance += netChange;
-        saveUsers(freshUsers);
+        userData.gold += netChange;
+        await userData.save();
 
+        // ✅ 3. LOG TO AUDIT
         await logToAudit(interaction.client, {
           userId,
           amount: netChange,
-          reason: `Dice: Dealer ${dealerRoll} vs User ${userRoll}`,
-        });
+          reason: `Dice: Bet ${choice.toUpperCase()} (Dealer: ${dealerRoll} vs You: ${userRoll})`,
+        }).catch((err) => console.error("Logger Error (Dice):", err));
 
         const resultEmbed = new EmbedBuilder()
           .setTitle(actuallyWon ? "🎉 YOU WON!" : "💀 HOUSE WINS")
@@ -156,11 +157,10 @@ module.exports = {
               `The dice show: **${diceEmojis[userRoll] || "🎲🎲"}**\n` +
               `Result: You chose **${choice.toUpperCase()}** and **${actuallyWon ? "Won" : "Lost"}**\n\n` +
               `💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
-              `🏦 **Balance:** \`${freshUsers[userId].balance.toLocaleString()}\` gold\n` +
+              `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold\n` +
               `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
           );
 
-        // --- REPEAT BUTTONS ---
         const repeatRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`dice_repeat_${amount}`)

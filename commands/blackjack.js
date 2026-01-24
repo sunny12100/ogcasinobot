@@ -5,8 +5,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const { logToAudit } = require("../utils/logger");
-const { loadUsers, saveUsers } = require("../utils/db");
+const User = require("../models/User");
+const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
 
 module.exports = {
   name: "blackjack",
@@ -14,18 +14,19 @@ module.exports = {
     let amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. STRICT VERIFICATION CHECK
-    const users = loadUsers();
-    if (!users[userId]) {
+    // 1. FETCH USER FROM MONGODB
+    const userData = await User.findOne({ userId });
+
+    if (!userData) {
       const err =
-        "❌ You are not verified! Please register in the casino-lobby first.";
+        "❌ You are not registered! Please use the registration panel first.";
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
     }
 
-    if (users[userId].balance < amount) {
-      const err = `❌ Not enough gold! Balance: \`${users[userId].balance.toLocaleString()}\``;
+    if (userData.gold < amount) {
+      const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
       return interaction.replied || interaction.deferred
         ? interaction.followUp({ content: err, ephemeral: true })
         : interaction.reply({ content: err, ephemeral: true });
@@ -50,7 +51,7 @@ module.exports = {
     ];
     let deck = [];
     for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
-    deck.sort(() => Math.random() - 0.5); // Quick shuffle
+    deck.sort(() => Math.random() - 0.5);
 
     const getVal = (hand) => {
       let val = 0,
@@ -96,44 +97,45 @@ module.exports = {
           },
         )
         .setFooter({
-          text: `💰 Bet: ${amount.toLocaleString()} | Balance: ${users[userId].balance.toLocaleString()}`,
+          text: `💰 Bet: ${amount.toLocaleString()} | Balance: ${userData.gold.toLocaleString()}`,
         });
       if (image) embed.setImage(image);
       return embed;
     };
 
-    const msg =
-      interaction.replied || interaction.deferred
-        ? await interaction.editReply({
-            embeds: [
-              createEmbed(
-                "🃏 BLACKJACK",
-                0x2f3136,
-                false,
-                "Shuffling...",
-                "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnd2ZWc1ODZvMWFzdHcyZjExZmQxemFjaHNuZXhhbTJob3BmMDd6biZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26ufkBRB1E836CxYA/giphy.gif",
-              ),
-            ],
-            components: [],
-          })
-        : await interaction.reply({
-            embeds: [
-              createEmbed(
-                "🃏 BLACKJACK",
-                0x2f3136,
-                false,
-                "Shuffling...",
-                "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnd2ZWc1ODZvMWFzdHcyZjExZmQxemFjaHNuZXhhbTJob3BmMDd6biZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26ufkBRB1E836CxYA/giphy.gif",
-              ),
-            ],
-            fetchReply: true,
-          });
+    // Initial message
+    const msg = await (interaction.replied || interaction.deferred
+      ? interaction.editReply({
+          embeds: [
+            createEmbed(
+              "🃏 BLACKJACK",
+              0x2f3136,
+              false,
+              "Shuffling...",
+              "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnd2ZWc1ODZvMWFzdHcyZjExZmQxemFjaHNuZXhhbTJob3BmMDd6biZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26ufkBRB1E836CxYA/giphy.gif",
+            ),
+          ],
+          components: [],
+        })
+      : interaction.reply({
+          embeds: [
+            createEmbed(
+              "🃏 BLACKJACK",
+              0x2f3136,
+              false,
+              "Shuffling...",
+              "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnd2ZWc1ODZvMWFzdHcyZjExZmQxemFjaHNuZXhhbTJob3BmMDd6biZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26ufkBRB1E836CxYA/giphy.gif",
+            ),
+          ],
+          fetchReply: true,
+        }));
 
+    // Start game after delay
     setTimeout(async () => {
-      // Natural Blackjack Check
-      if (getVal(playerHand) === 21) return finishGame("natural");
+      const pVal = getVal(playerHand);
+      if (pVal === 21) return finishGame("natural");
 
-      const canDouble = users[userId].balance >= amount * 2;
+      const canDouble = userData.gold >= amount * 2;
       const gameRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("hit")
@@ -146,7 +148,7 @@ module.exports = {
           .setStyle(ButtonStyle.Secondary)
           .setEmoji("🛑"),
       );
-      if (canDouble)
+      if (canDouble) {
         gameRow.addComponents(
           new ButtonBuilder()
             .setCustomId("double")
@@ -154,6 +156,7 @@ module.exports = {
             .setStyle(ButtonStyle.Danger)
             .setEmoji("💰"),
         );
+      }
 
       await interaction.editReply({
         embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, false, "Your move!")],
@@ -168,6 +171,7 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your game!", ephemeral: true });
+
         if (i.customId === "hit") {
           playerHand.push(deck.pop());
           if (getVal(playerHand) > 21) return collector.stop("bust");
@@ -201,8 +205,8 @@ module.exports = {
         if (reason === "stand")
           while (getVal(dealerHand) < 17) dealerHand.push(deck.pop());
 
-        const pVal = getVal(playerHand),
-          dVal = getVal(dealerHand);
+        const finalPVal = getVal(playerHand);
+        const finalDVal = getVal(dealerHand);
         let netChange = 0,
           statusText = "",
           winType = "loss";
@@ -211,34 +215,35 @@ module.exports = {
           netChange = Math.floor(amount * 1.5);
           statusText = "💰 **NATURAL!** Unstoppable 21!";
           winType = "win";
-        } else if (pVal > 21) {
+        } else if (finalPVal > 21) {
           netChange = -amount;
           statusText = "💥 **BUST!** You went over.";
-        } else if (dVal > 21) {
+        } else if (finalDVal > 21) {
           netChange = amount;
           statusText = "🏦 **DEALER BUSTS!** You win!";
           winType = "win";
-        } else if (pVal > dVal) {
+        } else if (finalPVal > finalDVal) {
           netChange = amount;
-          statusText = `✅ **WIN!** ${pVal} vs ${dVal}`;
+          statusText = `✅ **WIN!** ${finalPVal} vs ${finalDVal}`;
           winType = "win";
-        } else if (pVal < dVal) {
+        } else if (finalPVal < finalDVal) {
           netChange = -amount;
-          statusText = `❌ **LOSE!** ${dVal} beats ${pVal}`;
+          statusText = `❌ **LOSE!** ${finalDVal} beats ${finalPVal}`;
         } else {
           statusText = "🤝 **PUSH.** It's a tie.";
           winType = "push";
         }
 
-        const freshUsers = loadUsers();
-        freshUsers[userId].balance += netChange;
-        saveUsers(freshUsers);
+        // --- 1. MONGODB: UPDATE BALANCE ---
+        userData.gold += netChange;
+        await userData.save();
 
+        // --- 2. LOG TO AUDIT ---
         await logToAudit(interaction.client, {
           userId,
           amount: netChange,
-          reason: `Blackjack ${winType}`,
-        });
+          reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
+        }).catch((err) => console.error("Logger Error:", err));
 
         const endEmbed = createEmbed(
           winType === "push"
@@ -275,6 +280,7 @@ module.exports = {
           componentType: ComponentType.Button,
           time: 15000,
         });
+
         repeatCollector.on("collect", async (btn) => {
           if (btn.user.id !== userId) return;
           if (btn.customId.startsWith("bj_repeat_")) {
