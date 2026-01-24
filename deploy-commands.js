@@ -1,0 +1,203 @@
+require("dotenv").config();
+const {
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+} = require("discord.js");
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Check if the bot is alive"),
+
+  new SlashCommandBuilder()
+    .setName("balance")
+    .addUserOption((opt) =>
+      opt
+        .setName("user")
+        .setDescription("The person to view")
+        .setRequired(false),
+    )
+    .setDescription("Check your casino balance"),
+
+  new SlashCommandBuilder()
+    .setName("setup")
+    .setDescription("Create the registration and withdrawal panels")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName("roulette")
+    .setDescription("Start a roulette game")
+    .addIntegerOption((option) =>
+      option
+        .setName("amount")
+        .setDescription("Amount of gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("dice")
+    .setDescription("Roll the dice against the House!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("slots")
+    .setDescription("Try your luck on the OG Slots!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("coinflip")
+    .setDescription("Bet on Heads or Tails!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("highlow")
+    .setDescription("Guess if the next card is Higher or Lower!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("blackjack")
+    .setDescription("Play a hand of Blackjack against the House!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("leaderboard")
+    .setDescription("See the top 10 richest high-rollers in the server!"),
+
+  new SlashCommandBuilder()
+    .setName("aviator")
+    .setDescription("Watch the plane climb! Cash out before it flies away.")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    ),
+  new SlashCommandBuilder()
+    .setName("add-gold")
+    .setDescription("Admin: Add gold to a user")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addUserOption((opt) =>
+      opt
+        .setName("user")
+        .setDescription("The user to give gold to")
+        .setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Amount of gold")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
+
+  new SlashCommandBuilder()
+    .setName("remove-gold")
+    .setDescription("Admin: Take gold from a user")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addUserOption((opt) =>
+      opt
+        .setName("user")
+        .setDescription("The user to take gold from")
+        .setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Amount of gold")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
+  new SlashCommandBuilder()
+    .setName("pay")
+    .setDescription("Transfer gold to another verified player")
+    .addUserOption((opt) =>
+      opt.setName("user").setDescription("The person to pay").setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Amount of gold to send")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("Admin: View global economy statistics")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName("rps")
+    .setDescription("Challenge another player to Rock Paper Scissors for gold!")
+    .addUserOption((opt) =>
+      opt
+        .setName("opponent")
+        .setDescription("Who are you challenging?")
+        .setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
+].map((cmd) => cmd.toJSON());
+
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+(async () => {
+  try {
+    console.log("🔄 Updating command list with 50-500 limits...");
+    await rest.put(
+      Routes.applicationGuildCommands(
+        process.env.CLIENT_ID,
+        process.env.GUILD_ID,
+      ),
+      { body: commands },
+    );
+    console.log("✅ Commands updated! Limits are now live in Discord.");
+  } catch (err) {
+    console.error(err);
+  }
+})();
