@@ -57,26 +57,44 @@ module.exports = {
     // 4. THE CALCULATION
     setTimeout(async () => {
       const symbols = ["🍒", "🍋", "🍇", "🔔", "💎", "7️⃣"];
-      const winProbability = 0.42; // Adjusted house edge
-      const isLucky = Math.random() < winProbability;
+      const roll = Math.random() * 100; // Roll between 0.0 and 100.0
 
       let r1, r2, r3;
-      if (isLucky) {
-        r1 = r2 = r3 = symbols[Math.floor(Math.random() * symbols.length)];
+      let won = false;
+      let mult = 0;
+
+      if (roll <= 2) {
+        // 🏆 SEVEN JACKPOT (2% Chance)
+        won = true;
+        mult = 10;
+        r1 = r2 = r3 = "7️⃣";
+      } else if (roll <= 7) {
+        // 💎 DIAMOND WIN (5% Chance: 7 - 2 = 5)
+        won = true;
+        mult = 5;
+        r1 = r2 = r3 = "💎";
+      } else if (roll <= 37) {
+        // 🍒 STANDARD WIN (30% Chance: 37 - 7 = 30)
+        won = true;
+        mult = 1.5;
+        const fruits = ["🍒", "🍋", "🍇", "🔔"];
+        r1 = r2 = r3 = fruits[Math.floor(Math.random() * fruits.length)];
       } else {
+        // 💀 LOSS (63% Chance)
+        won = false;
         r1 = symbols[Math.floor(Math.random() * symbols.length)];
         r2 = symbols[Math.floor(Math.random() * symbols.length)];
         r3 = symbols[Math.floor(Math.random() * symbols.length)];
-        // Ensure they aren't all the same if "not lucky"
-        if (r1 === r2 && r2 === r3)
+
+        // Force a non-match if the random roll accidentally matched
+        if (r1 === r2 && r2 === r3) {
           r3 = symbols[(symbols.indexOf(r3) + 1) % symbols.length];
+        }
       }
 
-      const won = r1 === r2 && r2 === r3;
-      const mult = won ? (r1 === "7️⃣" ? 10 : r1 === "💎" ? 5 : 3) : 0;
-
       // 5. UPDATE MONGODB
-      const netChange = won ? amount * (mult - 1) : -amount;
+      // Note: Math.floor used for 1.5x payouts to avoid decimal gold
+      const netChange = won ? Math.floor(amount * mult) - amount : -amount;
 
       userData.gold += netChange;
       await userData.save();
@@ -86,17 +104,17 @@ module.exports = {
         userId,
         amount: netChange,
         reason: won
-          ? `Slots Jackpot [${r1}${r2}${r3}]`
+          ? `Slots Win [${r1}${r2}${r3}]`
           : `Slots Loss [${r1}${r2}${r3}]`,
       }).catch((err) => console.error("Audit Log Error:", err));
 
       const resultEmbed = new EmbedBuilder()
-        .setTitle(won ? "🎉 JACKPOT!" : "💀 BUSTED")
+        .setTitle(won ? "🎉 WINNER!" : "💀 BUSTED")
         .setColor(won ? 0x2ecc71 : 0xe74c3c)
         .setDescription(
           `## [ ${r1} | ${r2} | ${r3} ]\n` +
             `▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
-            `${won ? `Won **${(amount * mult).toLocaleString()}**` : `Lost **${amount.toLocaleString()}**`}\n\n` +
+            `${won ? `Won **${Math.floor(amount * mult).toLocaleString()}**` : `Lost **${amount.toLocaleString()}**`}\n\n` +
             `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold`,
         );
 
@@ -105,7 +123,7 @@ module.exports = {
           .setCustomId(`slots_repeat_${amount}`)
           .setLabel(`Spin Again (${amount})`)
           .setStyle(ButtonStyle.Success)
-          .setDisabled(userData.gold < amount), // Disable if they can't afford another spin
+          .setDisabled(userData.gold < amount),
         new ButtonBuilder()
           .setCustomId("slots_end")
           .setLabel("Quit")
@@ -126,7 +144,6 @@ module.exports = {
         if (i.customId.startsWith("slots_repeat_")) {
           await i.deferUpdate();
           collector.stop();
-          // Use module.exports to ensure the context of the execute function is correct
           return module.exports.execute(i, amount);
         }
 

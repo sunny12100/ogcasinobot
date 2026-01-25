@@ -6,8 +6,8 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const User = require("../models/User"); // Import your MongoDB model
-const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
+const User = require("../models/User");
+const { logToAudit } = require("../utils/logger");
 
 module.exports = {
   name: "roulette",
@@ -15,26 +15,18 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. FETCH USER FROM MONGODB
     const userData = await User.findOne({ userId });
-
     if (!userData) {
       const err =
         "❌ You are not registered! Please use the registration panel first.";
-      return interaction.replied || interaction.deferred
-        ? interaction.followUp({ content: err, ephemeral: true })
-        : interaction.reply({ content: err, ephemeral: true });
+      return interaction.reply({ content: err, ephemeral: true });
     }
 
-    // 2. CHECK BALANCE
     if (userData.gold < amount) {
       const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
-      return interaction.replied || interaction.deferred
-        ? interaction.followUp({ content: err, ephemeral: true })
-        : interaction.reply({ content: err, ephemeral: true });
+      return interaction.reply({ content: err, ephemeral: true });
     }
 
-    // --- BETTING MENU ---
     const menu = new StringSelectMenuBuilder()
       .setCustomId("roulette_bet")
       .setPlaceholder("📍 Place your bet on the table...")
@@ -56,7 +48,7 @@ module.exports = {
         {
           label: "Green",
           value: "green",
-          description: "Payout: 18x",
+          description: "Payout: 35x",
           emoji: "🟢",
         },
       ]);
@@ -68,22 +60,14 @@ module.exports = {
         "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcTRzYnljc3ozbzk5cG9xb2ozNDNrczR5bDJ1OXdkOXR2OXd5aDlvdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uflBhaGt5lQsaCA/giphy.gif",
       )
       .setDescription(
-        `👤 **Player:** <@${userId}>\n` +
-          `💰 **Bet Amount:** \`${amount.toLocaleString()}\` gold\n\n` +
-          `*Select an option below to spin the wheel!*`,
+        `👤 **Player:** <@${userId}>\n💰 **Bet Amount:** \`${amount.toLocaleString()}\` gold\n\n*Select an option to spin!*`,
       );
 
-    const response =
-      interaction.replied || interaction.deferred
-        ? await interaction.editReply({
-            embeds: [initialEmbed],
-            components: [new ActionRowBuilder().addComponents(menu)],
-          })
-        : await interaction.reply({
-            embeds: [initialEmbed],
-            components: [new ActionRowBuilder().addComponents(menu)],
-            fetchReply: true,
-          });
+    const response = await interaction.reply({
+      embeds: [initialEmbed],
+      components: [new ActionRowBuilder().addComponents(menu)],
+      fetchReply: true,
+    });
 
     const collector = response.createMessageComponentCollector({
       componentType: ComponentType.StringSelect,
@@ -95,87 +79,94 @@ module.exports = {
         return i.reply({ content: "Not your game!", ephemeral: true });
 
       const space = i.values[0];
-
-      const spinningEmbed = new EmbedBuilder()
-        .setTitle("🎰 WHEEL IS SPINNING...")
-        .setColor(0xffaa00)
-        .setThumbnail(
-          "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExbnI2Z254b3dzNjhzemtnZndiZDBqcmxhZGtxaHIzdmhoMXU1cXp3dSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/GWS8bXKxphfEI/giphy.gif",
-        )
-        .setDescription(
-          `🎲 **${i.user.username}** placed \`${amount}\` on **${space.toUpperCase()}**\n\n*Waiting for the ball to land...*`,
-        );
-
-      await i.update({ embeds: [spinningEmbed], components: [] });
+      await i.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🎰 WHEEL IS SPINNING...")
+            .setColor(0xffaa00)
+            .setDescription(
+              `🎲 **${i.user.username}** bet \`${amount}\` on **${space.toUpperCase()}**`,
+            ),
+        ],
+        components: [],
+      });
 
       setTimeout(async () => {
-        const roll = Math.floor(Math.random() * 38); // 0-36 + 37 (Double Zero)
-        const resultText = roll === 37 ? "00" : roll.toString();
+        const rollType = Math.random() * 100; // 0.0 to 100.0
+        let resultColor, resultNumber;
         const redNumbers = [
           1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36,
         ];
 
-        let resultColor =
-          roll === 0 || roll === 37
-            ? "green"
-            : redNumbers.includes(roll)
-              ? "red"
-              : "black";
+        // --- PROBABILITY ENGINE ---
+        if (rollType <= 1) {
+          // 🟢 1% GREEN WIN
+          resultColor = "green";
+          resultNumber = Math.random() < 0.5 ? 0 : "00";
+        } else if (rollType <= 48) {
+          // 🔴⚫ 47% CHANCE TO HIT USER'S COLOR/TYPE
+          // Logic: If user picked red, give red. If user picked black, give black.
+          // If user picked Even/Odd, give a matching number.
+          if (space === "red") resultColor = "red";
+          else if (space === "black") resultColor = "black";
+          else if (space === "even")
+            resultColor = Math.random() < 0.5 ? "red" : "black";
+          else if (space === "odd")
+            resultColor = Math.random() < 0.5 ? "red" : "black";
+          else resultColor = "red"; // Default fallthrough
 
+          // Generate a number that matches the color/parity logic
+          resultNumber =
+            resultColor === "red"
+              ? redNumbers[Math.floor(Math.random() * redNumbers.length)]
+              : 2;
+        } else {
+          // 💀 52% HOUSE WIN (Opposite of user's bet)
+          resultColor = space === "red" ? "black" : "red";
+          resultNumber = 13; // Example losing number
+        }
+
+        // --- WIN CHECK ---
         let won = false;
         let multiplier = 0;
 
-        // Win Logic
         if (space === resultColor && resultColor !== "green") {
           won = true;
           multiplier = 2;
         } else if (
           space === "even" &&
-          roll !== 0 &&
-          roll !== 37 &&
-          roll % 2 === 0
+          resultNumber !== "green" &&
+          parseInt(resultNumber) % 2 === 0
         ) {
           won = true;
           multiplier = 2;
         } else if (
           space === "odd" &&
-          roll !== 0 &&
-          roll !== 37 &&
-          roll % 2 !== 0
+          resultNumber !== "green" &&
+          parseInt(resultNumber) % 2 !== 0
         ) {
           won = true;
           multiplier = 2;
         } else if (space === "green" && resultColor === "green") {
           won = true;
-          multiplier = 18;
+          multiplier = 35;
         }
 
-        // 3. UPDATE MONGODB
         const netChange = won ? amount * multiplier - amount : -amount;
         userData.gold += netChange;
         await userData.save();
 
-        // ✅ 4. LOG TO AUDIT
         await logToAudit(interaction.client, {
           userId,
           amount: netChange,
-          reason: `Roulette: ${space.toUpperCase()} (Ball: ${resultText} ${resultColor.toUpperCase()})`,
-        }).catch((err) => console.error("Logger Error (Roulette):", err));
+          reason: `Roulette: ${space.toUpperCase()} (Ball: ${resultNumber} ${resultColor.toUpperCase()})`,
+        }).catch(() => null);
 
         const resultEmbed = new EmbedBuilder()
           .setTitle(won ? "✨ WINNER ✨" : "💀 HOUSE WINS")
           .setColor(won ? 0x2ecc71 : 0xe74c3c)
-          .setImage(
-            won
-              ? "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExaWlxcDJpcTRwcjhhNXhoa254OXRhenhlNzduMG0yc2F2NmlxNDUwMCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/etKSrsbbKbqwW6vzOg/giphy.gif"
-              : "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExZG40ZDE5cG1zaW9yaTRjcnJkZWJwNjU3bjIxaHk1YXZ1MDR3ZTF0NiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/cr9vIO7NsP5cY/giphy.gif",
-          )
           .setDescription(
-            `### The ball landed on: **${resultText} ${resultColor.toUpperCase()}**\n` +
-              `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
-              `💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
-              `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold\n` +
-              `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
+            `### Ball landed on: **${resultNumber} ${resultColor.toUpperCase()}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **Balance:** \`${userData.gold.toLocaleString()}\` gold\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
           );
 
         const repeatRow = new ActionRowBuilder().addComponents(
@@ -192,22 +183,6 @@ module.exports = {
         await interaction.editReply({
           embeds: [resultEmbed],
           components: [repeatRow],
-        });
-
-        const repeatCollector = response.createMessageComponentCollector({
-          componentType: ComponentType.Button,
-          time: 15000,
-        });
-
-        repeatCollector.on("collect", async (btn) => {
-          if (btn.user.id !== userId) return;
-          if (btn.customId.startsWith("roulette_repeat_")) {
-            await btn.deferUpdate();
-            repeatCollector.stop();
-            return module.exports.execute(btn, amount);
-          }
-          await btn.update({ components: [] });
-          repeatCollector.stop();
         });
       }, 3000);
       collector.stop();

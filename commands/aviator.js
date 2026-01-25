@@ -5,7 +5,7 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
-const User = require("../models/User"); // Import your Mongoose model
+const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
 module.exports = {
@@ -14,7 +14,6 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. FETCH USER FROM MONGODB
     const userData = await User.findOne({ userId });
 
     if (!userData) {
@@ -32,12 +31,25 @@ module.exports = {
         : interaction.reply({ content: errorMsg, ephemeral: true });
     }
 
-    // --- GAME LOGIC ---
-    // Standard Aviator logic: 10% chance of a high flight, otherwise lower crash points
-    const crashPoint = Math.max(
-      1,
-      Math.random() * (Math.random() < 0.1 ? 10 : 3) + 0.1,
-    ).toFixed(2);
+    // --- GAME LOGIC (CUSTOM PROBABILITY SYSTEM) ---
+    const roll = Math.random();
+    let crashPoint;
+
+    if (roll < 0.43) {
+      // 43% → 1.2x to 1.5x
+      crashPoint = 1.2 + Math.random() * 0.3;
+    } else if (roll < 0.83) {
+      // 40% → 1.5x to 2.0x
+      crashPoint = 1.5 + Math.random() * 0.5;
+    } else if (roll < 0.85) {
+      // 2% → 2.0x to 10.0x
+      crashPoint = 2.0 + Math.random() * 8.0;
+    } else {
+      // 15% → early crash (below 1.2x)
+      crashPoint = 0.1 + Math.random() * 1.1;
+    }
+
+    crashPoint = crashPoint.toFixed(2);
 
     let currentMultiplier = 1.0;
     let gameActive = true;
@@ -90,7 +102,6 @@ module.exports = {
       time: 60000,
     });
 
-    // --- ANIMATION LOOP ---
     const gameLoop = setInterval(async () => {
       if (!gameActive) return clearInterval(gameLoop);
 
@@ -117,14 +128,12 @@ module.exports = {
 
       gameActive = false;
       clearInterval(gameLoop);
-      // Small "lag" compensation
       currentMultiplier = Math.max(1.0, currentMultiplier - 0.1);
       collector.stop("cashed_out");
       await i.deferUpdate();
     });
 
     collector.on("end", async (_, reason) => {
-      // 2. RE-FETCH USER TO ENSURE UP-TO-DATE BALANCE BEFORE SAVING
       const freshUserData = await User.findOne({ userId });
       let netChange = 0;
 
@@ -138,7 +147,6 @@ module.exports = {
       freshUserData.gold += netChange;
       await freshUserData.save();
 
-      // LOG TO AUDIT
       await logToAudit(interaction.client, {
         userId,
         amount: netChange,
@@ -152,14 +160,13 @@ module.exports = {
         .setTitle(reason === "cashed_out" ? "💰 PROFIT SECURED" : "🔥 KABOOM")
         .setColor(reason === "cashed_out" ? 0x2ecc71 : 0xe74c3c)
         .setDescription(
-          `${reason === "cashed_out" ? `💵 **Exited at \`${currentMultiplier.toFixed(2)}x\`**` : `💥 **Crashed at \`${crashPoint}x\`**`}\n\n` +
+          `${
+            reason === "cashed_out"
+              ? `💵 **Exited at \`${currentMultiplier.toFixed(2)}x\`**`
+              : `💥 **Crashed at \`${crashPoint}x\`**`
+          }\n\n` +
             `**Net Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n` +
             `**New Balance:** \`${freshUserData.gold.toLocaleString()}\``,
-        )
-        .setThumbnail(
-          reason === "cashed_out"
-            ? "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2J4bjdjbjNrYjl2mWc4b2N2c3RjZnZzaWhmdWRoZGd4cWdtd2x2NyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/h0MTqLyvgG0Ss/giphy.gif"
-            : "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanN5ZHNpZ2RxZm4zanR0NDdjMGo2cmNnZ290emp0N3lxandqbGFiOCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/oe33xf3B50fsc/giphy.gif",
         );
 
       const endRow = new ActionRowBuilder().addComponents(
@@ -195,7 +202,7 @@ module.exports = {
         repeatCollector.stop();
       });
 
-      repeatCollector.on("end", (collected, reason) => {
+      repeatCollector.on("end", (_, reason) => {
         if (reason === "time")
           interaction.editReply({ components: [] }).catch(() => null);
       });

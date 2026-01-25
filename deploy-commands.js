@@ -182,6 +182,28 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+  new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("View the casino guide and game payouts"),
+  new SlashCommandBuilder()
+    .setName("mines")
+    .setDescription("Play Mines! Find gems and avoid the bombs.")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("mines")
+        .setDescription("Number of mines to hide (1-20)")
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(20),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
