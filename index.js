@@ -58,7 +58,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ephemeral: true,
       };
 
-      // SMART ERROR HANDLING: Prevents "Interaction already acknowledged"
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(errorPayload).catch(() => null);
       } else {
@@ -93,7 +92,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setTitle("Withdraw Gold");
         const amountInput = new TextInputBuilder()
           .setCustomId("withdraw_amount")
-          .setLabel("Amount to Withdraw")
+          .setLabel("Amount to Withdraw (Min: 50)")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("e.g. 1000")
           .setRequired(true);
@@ -152,48 +151,63 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // --- WITHDRAWAL SUBMISSION ---
     if (interaction.customId === "withdraw_modal") {
-      const amount = parseInt(
-        interaction.fields.getTextInputValue("withdraw_amount"),
-      );
+      const amountInput =
+        interaction.fields.getTextInputValue("withdraw_amount");
+      const amount = parseInt(amountInput);
       const customAccount =
         interaction.fields.getTextInputValue("withdraw_account");
 
-      const userData = await User.findOne({ userId: userId });
-
-      if (isNaN(amount) || amount <= 0)
+      // 🛑 MINIMUM WITHDRAWAL CHECK
+      if (isNaN(amount) || amount < 50) {
         return interaction.reply({
-          content: "❌ Invalid number.",
+          content:
+            "❌ **Withdrawal Failed:** The minimum amount you can withdraw is `50` gold.",
           ephemeral: true,
         });
+      }
 
-      if (!userData || !userData.verified)
+      const userData = await User.findOne({ userId: userId });
+
+      if (!userData || !userData.verified) {
         return interaction.reply({
           content: "❌ You must be verified to withdraw.",
           ephemeral: true,
         });
+      }
 
-      if (userData.gold < amount)
+      if (userData.gold < amount) {
         return interaction.reply({
-          content: `❌ Insufficient balance!`,
+          content: `❌ **Insufficient Balance!** You only have \`${userData.gold.toLocaleString()}\` gold.`,
           ephemeral: true,
         });
+      }
 
-      const target = customAccount || userData?.ttio;
-      const fee = Math.floor(amount * 0.03);
+      const target = customAccount || userData?.ttio || "Unknown";
+      const fee = Math.floor(amount * 0.03); // 3% fee
       const receiveAmount = amount - fee;
 
+      // Update Database
       userData.gold -= amount;
       await userData.save();
 
+      // Create Receipt for User
       const receiptEmbed = new EmbedBuilder()
         .setTitle("📤 Withdrawal Requested")
         .setColor(0x3498db)
         .addFields(
-          { name: "💰 Total Deducted", value: `${amount} Gold`, inline: true },
-          { name: "📉 Service Fee (3%)", value: `-${fee} Gold`, inline: true },
+          {
+            name: "💰 Total Deducted",
+            value: `${amount.toLocaleString()} Gold`,
+            inline: true,
+          },
+          {
+            name: "📉 Service Fee (3%)",
+            value: `-${fee.toLocaleString()} Gold`,
+            inline: true,
+          },
           {
             name: "🎁 You Receive",
-            value: `**${receiveAmount} Gold**`,
+            value: `**${receiveAmount.toLocaleString()} Gold**`,
             inline: true,
           },
           { name: "🎮 Destination", value: `\`${target}\``, inline: false },
@@ -202,6 +216,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.user.send({ embeds: [receiptEmbed] }).catch(() => null);
 
+      // Log for Admins
       const logChannelId = process.env.LOG_CHANNEL_ID;
       const logChannel =
         client.channels.cache.get(logChannelId) ||
@@ -216,14 +231,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
               .addFields(
                 { name: "User", value: `<@${userId}>`, inline: true },
                 { name: "Target", value: `\`${target}\``, inline: true },
-                { name: "Payout", value: `**${receiveAmount}**`, inline: true },
-              ),
+                {
+                  name: "Payout",
+                  value: `**${receiveAmount.toLocaleString()}**`,
+                  inline: true,
+                },
+              )
+              .setTimestamp(),
           ],
         });
       }
 
       await interaction.reply({
-        content: `✅ **Request Sent!** You will receive **${receiveAmount}** gold shortly.`,
+        content: `✅ **Request Sent!** You will receive **${receiveAmount.toLocaleString()}** gold shortly.`,
         ephemeral: true,
       });
     }
