@@ -5,158 +5,178 @@ const {
   ButtonStyle,
   ComponentType,
 } = require("discord.js");
+const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
-const User = require("../models/User"); // Import your Mongoose Model
+
+// 🔒 Memory lock to prevent multiple concurrent spins
+const activeSlots = new Set();
 
 module.exports = {
   name: "slots",
   async execute(interaction, repeatAmount = null) {
-    const amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. FETCH USER FROM MONGODB
-    const userData = await User.findOne({ userId });
-
-    // 2. VERIFICATION & BALANCE CHECK
-    if (!userData) {
-      const errorMsg =
-        "❌ You are not registered! Please register in the casino-lobby first.";
-      return interaction.replied || interaction.deferred
-        ? interaction.followUp({ content: errorMsg, ephemeral: true })
-        : interaction.reply({ content: errorMsg, ephemeral: true });
+    // 1. DEFER & LOCK CHECK (Crucial for preventing 10062 errors)
+    if (!repeatAmount && !interaction.replied && !interaction.deferred) {
+      await interaction.deferReply();
     }
 
-    if (userData.gold < amount) {
-      const errorMsg = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
-      return interaction.replied || interaction.deferred
-        ? interaction.followUp({ content: errorMsg, ephemeral: true })
-        : interaction.reply({ content: errorMsg, ephemeral: true });
+    if (activeSlots.has(userId)) {
+      const lockMsg = "❌ The reels are already spinning! Wait for the result.";
+      return repeatAmount
+        ? interaction.followUp({ content: lockMsg, ephemeral: true })
+        : interaction.editReply({ content: lockMsg });
     }
 
-    // 3. STARTING THE GAME (Visuals)
-    const spinGif =
-      "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExd2l6MzhjMGF0cW12aW9nOTlrdG1odnhjOHY0NnVna3VraHBmdGZsZCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Ce18KspdcaxaKuZ1HC/giphy.gif";
+    const amount = repeatAmount ?? interaction.options.getInteger("amount");
 
-    const spinningEmbed = new EmbedBuilder()
-      .setTitle("🎰 SPINNING...")
-      .setColor(0xffaa00)
-      .setImage(spinGif)
-      .setDescription(`Betting **${amount.toLocaleString()}** gold!`);
-
-    const response =
-      interaction.replied || interaction.deferred
-        ? await interaction.editReply({
-            embeds: [spinningEmbed],
-            components: [],
-          })
-        : await interaction.reply({
-            embeds: [spinningEmbed],
-            fetchReply: true,
-          });
-
-    // 4. THE CALCULATION
-    setTimeout(async () => {
-      const symbols = ["🍒", "🍋", "🍇", "🔔", "💎", "7️⃣"];
-      const roll = Math.random() * 100; // Roll between 0.0 and 100.0
-
-      let r1, r2, r3;
-      let won = false;
-      let mult = 0;
-
-      if (roll <= 2) {
-        // 🏆 SEVEN JACKPOT (2% Chance)
-        won = true;
-        mult = 10;
-        r1 = r2 = r3 = "7️⃣";
-      } else if (roll <= 7) {
-        // 💎 DIAMOND WIN (5% Chance: 7 - 2 = 5)
-        won = true;
-        mult = 5;
-        r1 = r2 = r3 = "💎";
-      } else if (roll <= 37) {
-        // 🍒 STANDARD WIN (30% Chance: 37 - 7 = 30)
-        won = true;
-        mult = 1.5;
-        const fruits = ["🍒", "🍋", "🍇", "🔔"];
-        r1 = r2 = r3 = fruits[Math.floor(Math.random() * fruits.length)];
-      } else {
-        // 💀 LOSS (63% Chance)
-        won = false;
-        r1 = symbols[Math.floor(Math.random() * symbols.length)];
-        r2 = symbols[Math.floor(Math.random() * symbols.length)];
-        r3 = symbols[Math.floor(Math.random() * symbols.length)];
-
-        // Force a non-match if the random roll accidentally matched
-        if (r1 === r2 && r2 === r3) {
-          r3 = symbols[(symbols.indexOf(r3) + 1) % symbols.length];
-        }
+    try {
+      // 2. FETCH USER & VALIDATE
+      const userData = await User.findOne({ userId });
+      if (!userData || userData.gold < amount) {
+        const err = `❌ Not enough gold! Balance: \`${userData?.gold?.toLocaleString() || 0}\``;
+        return repeatAmount
+          ? interaction.followUp({ content: err, ephemeral: true })
+          : interaction.editReply({ content: err });
       }
 
-      // 5. UPDATE MONGODB
-      // Note: Math.floor used for 1.5x payouts to avoid decimal gold
-      const netChange = won ? Math.floor(amount * mult) - amount : -amount;
+      // Set Lock
+      activeSlots.add(userId);
+      // Failsafe to remove lock after 20 seconds if something crashes
+      const failSafe = setTimeout(() => activeSlots.delete(userId), 20000);
 
-      userData.gold += netChange;
-      await userData.save();
+      // 3. STARTING THE GAME (Visuals)
+      const spinGif =
+        "https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExd2l6MzhjMGF0cW12aW9nOTlrdG1odnhjOHY0NnVna3VraHBmdGZsZCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Ce18KspdcaxaKuZ1HC/giphy.gif";
 
-      // 6. LOG TO AUDIT
-      await logToAudit(interaction.client, {
-        userId,
-        amount: netChange,
-        reason: won
-          ? `Slots Win [${r1}${r2}${r3}]`
-          : `Slots Loss [${r1}${r2}${r3}]`,
-      }).catch((err) => console.error("Audit Log Error:", err));
+      const spinningEmbed = new EmbedBuilder()
+        .setTitle("🎰 SPINNING...")
+        .setColor(0xffaa00)
+        .setImage(spinGif)
+        .setDescription(`Betting **${amount.toLocaleString()}** gold!`);
 
-      const resultEmbed = new EmbedBuilder()
-        .setTitle(won ? "🎉 WINNER!" : "💀 BUSTED")
-        .setColor(won ? 0x2ecc71 : 0xe74c3c)
-        .setDescription(
-          `## [ ${r1} | ${r2} | ${r3} ]\n` +
-            `▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
-            `${won ? `Won **${Math.floor(amount * mult).toLocaleString()}**` : `Lost **${amount.toLocaleString()}**`}\n\n` +
-            `🏦 **New Balance:** \`${userData.gold.toLocaleString()}\` gold`,
+      const response = await interaction.editReply({
+        embeds: [spinningEmbed],
+        components: [],
+      });
+
+      // 4. THE CALCULATION (Delayed for visual effect)
+      setTimeout(async () => {
+        clearTimeout(failSafe);
+        activeSlots.delete(userId);
+
+        const symbols = ["🍒", "🍋", "🍇", "🔔", "💎", "7️⃣"];
+        const roll = Math.random() * 100;
+
+        let r1, r2, r3;
+        let won = false;
+        let mult = 0;
+
+        // --- PROBABILITY ENGINE ---
+        if (roll <= 1) {
+          // 7️⃣ JACKPOT (1%)
+          won = true;
+          mult = 7;
+          r1 = r2 = r3 = "7️⃣";
+        } else if (roll <= 5) {
+          // 💎 WIN (4%)
+          won = true;
+          mult = 3;
+          r1 = r2 = r3 = "💎";
+        } else if (roll <= 35) {
+          // 🍒 STANDARD WIN (30%)
+          won = true;
+          mult = 1.5;
+          const fruits = ["🍒", "🍋", "🍇", "🔔"];
+          r1 = r2 = r3 = fruits[Math.floor(Math.random() * fruits.length)];
+        } else {
+          // 💀 LOSS (65%)
+          won = false;
+          r1 = symbols[Math.floor(Math.random() * symbols.length)];
+          r2 = symbols[Math.floor(Math.random() * symbols.length)];
+          r3 = symbols[Math.floor(Math.random() * symbols.length)];
+          // Ensure it's not a triple match
+          if (r1 === r2 && r2 === r3) {
+            r3 = symbols[(symbols.indexOf(r3) + 1) % symbols.length];
+          }
+        }
+
+        const netChange = won ? Math.floor(amount * mult) - amount : -amount;
+
+        // 5. ATOMIC DATABASE UPDATE
+        const updatedUser = await User.findOneAndUpdate(
+          { userId },
+          { $inc: { gold: netChange } },
+          { new: true },
         );
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`slots_repeat_${amount}`)
-          .setLabel(`Spin Again (${amount})`)
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(userData.gold < amount),
-        new ButtonBuilder()
-          .setCustomId("slots_end")
-          .setLabel("Quit")
-          .setStyle(ButtonStyle.Danger),
-      );
+        const resultEmbed = new EmbedBuilder()
+          .setTitle(won ? "🎉 WINNER!" : "💀 BUSTED")
+          .setColor(won ? 0x2ecc71 : 0xe74c3c)
+          .setDescription(
+            `## [ ${r1} | ${r2} | ${r3} ]\n` +
+              `▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n` +
+              `${won ? `Won **${Math.floor(amount * mult).toLocaleString()}**` : `Lost **${amount.toLocaleString()}**`} gold\n\n` +
+              `🏦 **New Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+          );
 
-      await interaction.editReply({ embeds: [resultEmbed], components: [row] });
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`slots_rep_${amount}`)
+            .setLabel(`Spin Again (${amount})`)
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(updatedUser.gold < amount),
+          new ButtonBuilder()
+            .setCustomId("slots_quit")
+            .setLabel("Quit")
+            .setStyle(ButtonStyle.Secondary),
+        );
 
-      const collector = response.createMessageComponentCollector({
-        componentType: ComponentType.Button,
-        time: 15000,
-      });
+        const finalMsg = await interaction.editReply({
+          embeds: [resultEmbed],
+          components: [row],
+        });
 
-      collector.on("collect", async (i) => {
-        if (i.user.id !== userId)
-          return i.reply({ content: "Start your own game!", ephemeral: true });
+        // 6. REPEAT COLLECTOR
+        const repeatCollector = finalMsg.createMessageComponentCollector({
+          componentType: ComponentType.Button,
+          time: 15000,
+        });
 
-        if (i.customId.startsWith("slots_repeat_")) {
-          await i.deferUpdate();
-          collector.stop();
-          return module.exports.execute(i, amount);
-        }
+        repeatCollector.on("collect", async (i) => {
+          if (i.user.id !== userId)
+            return i.reply({ content: "Not your game!", ephemeral: true });
 
-        if (i.customId === "slots_end") {
-          await i.update({ components: [] });
-          collector.stop();
-        }
-      });
+          if (i.customId.startsWith("slots_rep_")) {
+            await i.update({ components: [] }).catch(() => null);
+            repeatCollector.stop();
+            return module.exports.execute(i, amount);
+          }
 
-      collector.on("end", (collected, reason) => {
-        if (reason === "time")
-          interaction.editReply({ components: [] }).catch(() => null);
-      });
-    }, 2000);
+          if (i.customId === "slots_quit") {
+            await i.update({ components: [] });
+            repeatCollector.stop();
+          }
+        });
+
+        repeatCollector.on("end", (collected, reason) => {
+          if (reason === "time") {
+            interaction.editReply({ components: [] }).catch(() => null);
+          }
+        });
+
+        // LOG TO AUDIT
+        logToAudit(interaction.client, {
+          userId,
+          amount: netChange,
+          reason: won
+            ? `Slots Win [${r1}${r2}${r3}]`
+            : `Slots Loss [${r1}${r2}${r3}]`,
+        }).catch(() => null);
+      }, 2000);
+    } catch (err) {
+      console.error(err);
+      activeSlots.delete(userId);
+    }
   },
 };

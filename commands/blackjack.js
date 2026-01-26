@@ -6,204 +6,115 @@ const {
   ComponentType,
 } = require("discord.js");
 const User = require("../models/User");
-const { logToAudit } = require("../utils/logger"); // ✅ Added Logger Import
+const { logToAudit } = require("../utils/logger");
+
+const activeBlackjack = new Set();
 
 module.exports = {
   name: "blackjack",
   async execute(interaction, repeatAmount = null) {
-    let amount = repeatAmount ?? interaction.options.getInteger("amount");
     const userId = interaction.user.id;
 
-    // 1. FETCH USER FROM MONGODB
-    const userData = await User.findOne({ userId });
-
-    if (!userData) {
-      const err =
-        "❌ You are not registered! Please use the registration panel first.";
-      return interaction.replied || interaction.deferred
-        ? interaction.followUp({ content: err, ephemeral: true })
-        : interaction.reply({ content: err, ephemeral: true });
+    // 1. Handling the Interaction Lifecycle
+    if (!repeatAmount && !interaction.replied && !interaction.deferred) {
+      await interaction.deferReply();
     }
 
-    if (userData.gold < amount) {
-      const err = `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``;
-      return interaction.replied || interaction.deferred
-        ? interaction.followUp({ content: err, ephemeral: true })
-        : interaction.reply({ content: err, ephemeral: true });
+    if (activeBlackjack.has(userId)) {
+      const lockMsg = "❌ You already have a game in progress!";
+      return repeatAmount
+        ? interaction.followUp({ content: lockMsg, ephemeral: true })
+        : interaction.editReply({ content: lockMsg });
     }
 
-    // --- DECK & HAND LOGIC ---
-    const suits = ["♠️", "❤️", "♣️", "♦️"];
-    const values = [
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "10",
-      "J",
-      "Q",
-      "K",
-      "A",
-    ];
-    let deck = [];
-    for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
-    deck.sort(() => Math.random() - 0.5);
+    const amount = repeatAmount ?? interaction.options.getInteger("amount");
 
-    const getVal = (hand) => {
-      let val = 0,
-        aces = 0;
-      for (const card of hand) {
-        const v = card.replace(/[`♠️❤️♣️♦️]/g, "");
-        if (v === "A") aces++;
-        else if (["J", "Q", "K"].includes(v)) val += 10;
-        else val += parseInt(v);
-      }
-      for (let i = 0; i < aces; i++) val += val + 11 <= 21 ? 11 : 1;
-      return val;
-    };
-
-    let playerHand = [deck.pop(), deck.pop()];
-    let dealerHand = [deck.pop(), deck.pop()];
-
-    const createEmbed = (
-      title,
-      color,
-      showDealer = false,
-      status = "Dealing...",
-      image = null,
-    ) => {
-      const pVal = getVal(playerHand);
-      const dVal = getVal(dealerHand);
-      const embed = new EmbedBuilder()
-        .setTitle(title)
-        .setColor(color)
-        .setDescription(`**GAME STATUS**\n> ${status}\n` + `▬`.repeat(25))
-        .addFields(
-          {
-            name: "👤 PLAYER",
-            value: `**${playerHand.join(" ")}**\nValue: \`${pVal}\``,
-            inline: true,
-          },
-          {
-            name: "🏦 DEALER",
-            value: showDealer
-              ? `**${dealerHand.join(" ")}**\nValue: \`${dVal}\``
-              : `**${dealerHand[0]}** \`??\``,
-            inline: true,
-          },
-        )
-        .setFooter({
-          text: `💰 Bet: ${amount.toLocaleString()} | Balance: ${userData.gold.toLocaleString()}`,
-        });
-      if (image) embed.setImage(image);
-      return embed;
-    };
-
-    // Initial message
-    const msg = await (interaction.replied || interaction.deferred
-      ? interaction.editReply({
-          embeds: [
-            createEmbed(
-              "🃏 BLACKJACK",
-              0x2f3136,
-              false,
-              "Shuffling...",
-              "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnd2ZWc1ODZvMWFzdHcyZjExZmQxemFjaHNuZXhhbTJob3BmMDd6biZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26ufkBRB1E836CxYA/giphy.gif",
-            ),
-          ],
-          components: [],
-        })
-      : interaction.reply({
-          embeds: [
-            createEmbed(
-              "🃏 BLACKJACK",
-              0x2f3136,
-              false,
-              "Shuffling...",
-              "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExYnd2ZWc1ODZvMWFzdHcyZjExZmQxemFjaHNuZXhhbTJob3BmMDd6biZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26ufkBRB1E836CxYA/giphy.gif",
-            ),
-          ],
-          fetchReply: true,
-        }));
-
-    // Start game after delay
-    setTimeout(async () => {
-      const pVal = getVal(playerHand);
-      if (pVal === 21) return finishGame("natural");
-
-      const canDouble = userData.gold >= amount * 2;
-      const gameRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("hit")
-          .setLabel("Hit")
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji("➕"),
-        new ButtonBuilder()
-          .setCustomId("stand")
-          .setLabel("Stand")
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji("🛑"),
-      );
-      if (canDouble) {
-        gameRow.addComponents(
-          new ButtonBuilder()
-            .setCustomId("double")
-            .setLabel("Double Down")
-            .setStyle(ButtonStyle.Danger)
-            .setEmoji("💰"),
-        );
+    try {
+      const userData = await User.findOne({ userId });
+      if (!userData || userData.gold < amount) {
+        const err = `❌ Not enough gold! Balance: \`${userData?.gold?.toLocaleString() || 0}\``;
+        return repeatAmount
+          ? interaction.followUp({ content: err, ephemeral: true })
+          : interaction.editReply({ content: err });
       }
 
-      await interaction.editReply({
-        embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, false, "Your move!")],
-        components: [gameRow],
-      });
+      activeBlackjack.add(userId);
+      const failSafe = setTimeout(() => activeBlackjack.delete(userId), 60000);
 
-      const collector = msg.createMessageComponentCollector({
-        componentType: ComponentType.Button,
-        time: 30000,
-      });
+      // Deck Logic
+      const suits = ["♠️", "❤️", "♣️", "♦️"];
+      const values = [
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "J",
+        "Q",
+        "K",
+        "A",
+      ];
+      let deck = [];
+      for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
+      deck.sort(() => Math.random() - 0.5);
 
-      collector.on("collect", async (i) => {
-        if (i.user.id !== userId)
-          return i.reply({ content: "Not your game!", ephemeral: true });
-
-        if (i.customId === "hit") {
-          playerHand.push(deck.pop());
-          if (getVal(playerHand) > 21) return collector.stop("bust");
-          await i.update({
-            embeds: [
-              createEmbed("🃏 BLACKJACK", 0x5865f2, false, "Drawing card..."),
-            ],
-            components: [
-              new ActionRowBuilder().addComponents(
-                gameRow.components[0],
-                gameRow.components[1],
-              ),
-            ],
-          });
-        } else if (i.customId === "double") {
-          amount *= 2;
-          playerHand.push(deck.pop());
-          collector.stop(getVal(playerHand) > 21 ? "bust" : "stand");
-          await i.deferUpdate();
-        } else {
-          collector.stop("stand");
-          await i.deferUpdate();
+      const getVal = (hand) => {
+        let val = 0,
+          aces = 0;
+        for (const card of hand) {
+          const v = card.replace(/[`♠️❤️♣️♦️]/g, "");
+          if (v === "A") aces++;
+          else if (["J", "Q", "K"].includes(v)) val += 10;
+          else val += parseInt(v);
         }
-      });
+        for (let i = 0; i < aces; i++) val += val + 11 <= 21 ? 11 : 1;
+        return val;
+      };
 
-      collector.on("end", async (_, reason) => {
-        if (reason !== "time") finishGame(reason);
-      });
+      let playerHand = [deck.pop(), deck.pop()];
+      let dealerHand = [deck.pop(), deck.pop()];
 
-      async function finishGame(reason) {
-        if (reason === "stand")
+      const createEmbed = (
+        title,
+        color,
+        showDealer = false,
+        status = "Your move!",
+      ) => {
+        return new EmbedBuilder()
+          .setTitle(title)
+          .setColor(color)
+          .setDescription(`**GAME STATUS**\n> ${status}\n` + `▬`.repeat(25))
+          .addFields(
+            {
+              name: "👤 PLAYER",
+              value: `**${playerHand.join(" ")}**\nValue: \`${getVal(playerHand)}\``,
+              inline: true,
+            },
+            {
+              name: "🏦 DEALER",
+              value: showDealer
+                ? `**${dealerHand.join(" ")}**\nValue: \`${getVal(dealerHand)}\``
+                : `**${dealerHand[0]}** \`??\``,
+              inline: true,
+            },
+          )
+          .setFooter({
+            text: `💰 Bet: ${amount.toLocaleString()} | Balance: ${userData.gold.toLocaleString()}`,
+          });
+      };
+
+      // Define the finishGame function inside try/catch so it has access to scope
+      const finishGame = async (reason) => {
+        clearTimeout(failSafe);
+        activeBlackjack.delete(userId);
+
+        if (reason === "stand") {
           while (getVal(dealerHand) < 17) dealerHand.push(deck.pop());
+        }
 
         const finalPVal = getVal(playerHand);
         const finalDVal = getVal(dealerHand);
@@ -234,16 +145,7 @@ module.exports = {
           winType = "push";
         }
 
-        // --- 1. MONGODB: UPDATE BALANCE ---
-        userData.gold += netChange;
-        await userData.save();
-
-        // --- 2. LOG TO AUDIT ---
-        await logToAudit(interaction.client, {
-          userId,
-          amount: netChange,
-          reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
-        }).catch((err) => console.error("Logger Error:", err));
+        await User.updateOne({ userId }, { $inc: { gold: netChange } });
 
         const endEmbed = createEmbed(
           winType === "push"
@@ -262,8 +164,8 @@ module.exports = {
 
         const repeatRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`bj_repeat_${amount}`)
-            .setLabel(`Play Again (${amount})`)
+            .setCustomId(`bj_rep_${amount}`)
+            .setLabel("Play Again")
             .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
             .setCustomId("bj_quit")
@@ -283,15 +185,114 @@ module.exports = {
 
         repeatCollector.on("collect", async (btn) => {
           if (btn.user.id !== userId) return;
-          if (btn.customId.startsWith("bj_repeat_")) {
-            await btn.deferUpdate();
+          if (btn.customId.startsWith("bj_rep_")) {
+            await btn.update({ components: [] }).catch(() => null);
             repeatCollector.stop();
-            return module.exports.execute(btn, amount);
+            return this.execute(btn, amount);
           }
           await btn.update({ components: [] });
           repeatCollector.stop();
         });
+
+        logToAudit(interaction.client, {
+          userId,
+          amount: netChange,
+          reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
+        }).catch(() => null);
+      };
+
+      // STARTING THE VISUAL GAME
+      const pVal = getVal(playerHand);
+      if (pVal === 21) {
+        // We must editReply first to satisfy Discord, then finish
+        await interaction.editReply({
+          embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, true, "Blackjack!")],
+        });
+        return finishGame("natural");
       }
-    }, 1500);
+
+      const canDouble = userData.gold >= amount * 2;
+      const gameRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("hit")
+          .setLabel("Hit")
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji("➕"),
+        new ButtonBuilder()
+          .setCustomId("stand")
+          .setLabel("Stand")
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji("🛑"),
+      );
+      if (canDouble) {
+        gameRow.addComponents(
+          new ButtonBuilder()
+            .setCustomId("double")
+            .setLabel("Double")
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji("💰"),
+        );
+      }
+
+      const msg = await interaction.editReply({
+        embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
+        components: [gameRow],
+        fetchReply: true,
+      });
+
+      const collector = msg.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 30000,
+      });
+
+      collector.on("collect", async (i) => {
+        if (i.user.id !== userId)
+          return i.reply({ content: "Not your game!", ephemeral: true });
+
+        if (i.customId === "hit") {
+          playerHand.push(deck.pop());
+          if (getVal(playerHand) > 21) return collector.stop("bust");
+
+          await i.update({
+            embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, false, "You hit!")],
+            components: [
+              new ActionRowBuilder().addComponents(
+                gameRow.components[0],
+                gameRow.components[1],
+              ),
+            ],
+          });
+        } else if (i.customId === "double") {
+          playerHand.push(deck.pop());
+          // Double the internal amount for the database update later
+          const originalAmount = amount;
+          const doubleAmount = amount * 2;
+          // Note: Logic inside finishGame will use the scoped 'amount', so we update it here
+          module.exports.execute.amount = doubleAmount;
+
+          collector.stop(getVal(playerHand) > 21 ? "bust" : "stand");
+          await i.deferUpdate();
+        } else {
+          collector.stop("stand");
+          await i.deferUpdate();
+        }
+      });
+
+      collector.on("end", (collected, reason) => {
+        if (reason === "time") {
+          activeBlackjack.delete(userId);
+          return interaction.editReply({ components: [] }).catch(() => null);
+        }
+        finishGame(reason);
+      });
+    } catch (err) {
+      console.error(err);
+      activeBlackjack.delete(userId);
+      if (interaction.deferred || interaction.replied) {
+        await interaction
+          .editReply({ content: "❌ A system error occurred." })
+          .catch(() => null);
+      }
+    }
   },
 };

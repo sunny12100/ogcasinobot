@@ -133,7 +133,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         { upsert: true, new: true },
       );
 
-      const ROLE_ID = "1464514701596688524";
+      const ROLE_ID = "1465208410852294708";
       const role = interaction.guild.roles.cache.get(ROLE_ID);
 
       if (role) {

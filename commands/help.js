@@ -31,6 +31,7 @@ module.exports = {
             "`/dice`\n" +
             "`/highlow`\n" +
             "`/mines`\n" +
+            "`/horserace`\n" +
             "`/rps`– PvP between two players",
         },
         {

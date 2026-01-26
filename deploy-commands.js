@@ -204,6 +204,29 @@ const commands = [
         .setMinValue(1)
         .setMaxValue(20),
     ),
+  new SlashCommandBuilder()
+    .setName("horserace")
+    .setDescription("Bet on a horse race!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-500)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(500),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName("horse")
+        .setDescription("Pick your champion")
+        .setRequired(true)
+        .addChoices(
+          { name: "OG (Red)", value: "OG" },
+          { name: "CORGI (Blue)", value: "CORGI" },
+          { name: "TITAN (Green)", value: "TITAN" },
+          { name: "IND (Yellow)", value: "IND" },
+        ),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -211,6 +234,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 (async () => {
   try {
     console.log("🔄 Updating command list with 50-500 limits...");
+
     await rest.put(
       Routes.applicationGuildCommands(
         process.env.CLIENT_ID,

@@ -8,6 +8,9 @@ const {
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
+// 🔒 Memory lock to prevent double-games
+const activeMines = new Set();
+
 module.exports = {
   name: "mines",
   async execute(interaction) {
@@ -15,25 +18,28 @@ module.exports = {
     const mineCount = interaction.options.getInteger("mines") || 3;
     const userId = interaction.user.id;
 
-    // 1. Database Check
-    const userData = await User.findOne({ userId });
-    if (!userData) {
+    // 1. Prevent Double Play
+    if (activeMines.has(userId)) {
       return interaction.reply({
         content:
-          "❌ You are not registered! Please use the registration panel first.",
+          "❌ You already have a game in progress! If it crashed, wait 30s.",
         ephemeral: true,
       });
     }
 
-    if (userData.gold < amount) {
+    const userData = await User.findOne({ userId });
+    if (!userData || userData.gold < amount) {
       return interaction.reply({
-        content: `❌ Not enough gold! Balance: \`${userData.gold.toLocaleString()}\``,
+        content: "❌ Not enough gold!",
         ephemeral: true,
       });
     }
 
-    // 2. Initial Setup
-    // Deduct bet immediately to prevent abuse
+    // 2. Set Lock & Initial Deduction
+    activeMines.add(userId);
+    // Auto-reset lock after 30s as a fail-safe for errors
+    const failSafe = setTimeout(() => activeMines.delete(userId), 30000);
+
     userData.gold -= amount;
     await userData.save();
 
@@ -50,39 +56,37 @@ module.exports = {
       }
     }
 
-    // Helper to calculate multiplier
     const getMultiplier = (rev) => {
+      if (rev === 0) return 1.0;
       let mult = 1.0;
       for (let i = 0; i < rev; i++) {
         mult *= (25 - i) / (25 - i - mineCount);
       }
-      return mult * 0.95; // 5% House Edge
+      const scalingFactor = rev <= 2 ? 0.82 : 0.94;
+      return mult * scalingFactor;
     };
 
-    // 3. UI Generator (Corrected: Integrates Cashout into the grid rows)
     const createGridRows = (revealedIndices = [], showMines = false) => {
       const rows = [];
       for (let i = 0; i < 5; i++) {
         const row = new ActionRowBuilder();
         for (let j = 0; j < 5; j++) {
           const index = i * 5 + j;
-
-          // Replace the very last button (index 24) with a Cash Out button
-          // This ensures we never exceed 5 rows total
           if (index === 24 && !isGameOver) {
             const currentMult = getMultiplier(revealed);
             const cashoutVal = Math.floor(amount * currentMult);
-            const cashoutBtn = new ButtonBuilder()
-              .setCustomId("mine_cashout")
-              .setLabel(revealed > 0 ? `Cash Out (${cashoutVal})` : "Cash Out")
-              .setStyle(ButtonStyle.Success)
-              .setDisabled(revealed === 0);
-            row.addComponents(cashoutBtn);
+            row.addComponents(
+              new ButtonBuilder()
+                .setCustomId("mine_cashout")
+                .setLabel(
+                  revealed > 0 ? `Cash Out (${cashoutVal})` : "Cash Out",
+                )
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(revealed === 0),
+            );
             continue;
           }
-
           const btn = new ButtonBuilder().setCustomId(`mine_${index}`);
-
           if (revealedIndices.includes(index)) {
             btn.setLabel("💎").setStyle(ButtonStyle.Primary).setDisabled(true);
           } else if (showMines && grid[index] === "mine") {
@@ -101,10 +105,10 @@ module.exports = {
     };
 
     const mainEmbed = new EmbedBuilder()
-      .setTitle("💣 OG MINES")
+      .setTitle("💣 PREMIER MINES")
       .setColor(0xffaa00)
       .setDescription(
-        `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` | 💣 **Mines:** \`${mineCount}\`\n\n**Multiplier:** \`1.00x\`\n**Profit:** \`0\` gold\n\n*Tap tiles to find gems. Bottom-right button is Cash Out!*`,
+        `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n\n**Multiplier:** \`1.00x\``,
       );
 
     const msg = await interaction.reply({
@@ -115,7 +119,7 @@ module.exports = {
 
     const collector = msg.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 120000,
+      time: 60000, // 1 minute per game
     });
 
     const revealedIndices = [];
@@ -124,74 +128,79 @@ module.exports = {
       if (i.user.id !== userId)
         return i.reply({ content: "Not your game!", ephemeral: true });
 
-      // --- CASHOUT LOGIC ---
       if (i.customId === "mine_cashout") {
         isGameOver = true;
+        clearTimeout(failSafe);
+        activeMines.delete(userId);
         collector.stop();
+
         const finalMult = getMultiplier(revealed);
         const winAmount = Math.floor(amount * finalMult);
 
-        userData.gold += winAmount;
-        await userData.save();
+        // Response first to avoid 10062
+        await i.update({
+          embeds: [
+            EmbedBuilder.from(mainEmbed)
+              .setTitle("💰 CASHOUT")
+              .setColor(0x2ecc71)
+              .setDescription(
+                `### Payout: **${winAmount.toLocaleString()} gold**`,
+              ),
+          ],
+          components: createGridRows(revealedIndices, true),
+        });
 
-        await logToAudit(interaction.client, {
+        // Async DB update
+        await User.updateOne({ userId }, { $inc: { gold: winAmount } });
+        logToAudit(interaction.client, {
           userId,
           amount: winAmount - amount,
-          reason: `Mines Cashout (${mineCount} mines, ${revealed} gems)`,
+          reason: "Mines Cashout",
         }).catch(() => null);
-
-        const winEmbed = EmbedBuilder.from(mainEmbed)
-          .setColor(0x2ecc71)
-          .setTitle("💰 CASHED OUT")
-          .setDescription(
-            `### Payout: **${winAmount.toLocaleString()} gold**\nMultiplier: \`${finalMult.toFixed(2)}x\``,
-          );
-
-        return i.update({
-          embeds: [winEmbed],
-          components: createGridRows(revealedIndices, true),
-        });
+        return;
       }
 
-      // --- MINE/GEM LOGIC ---
       const index = parseInt(i.customId.split("_")[1]);
-
       if (grid[index] === "mine") {
         isGameOver = true;
+        clearTimeout(failSafe);
+        activeMines.delete(userId);
         collector.stop();
 
-        await logToAudit(interaction.client, {
-          userId,
-          amount: -amount,
-          reason: `Mines Hit (Lost ${amount})`,
-        }).catch(() => null);
-
-        const loseEmbed = EmbedBuilder.from(mainEmbed)
-          .setColor(0xe74c3c)
-          .setTitle("💥 BOOM!")
-          .setDescription(
-            `### You hit a mine!\nLost: \`${amount.toLocaleString()}\` gold`,
-          );
-
-        return i.update({
-          embeds: [loseEmbed],
+        await i.update({
+          embeds: [
+            EmbedBuilder.from(mainEmbed)
+              .setTitle("💥 BOOM!")
+              .setColor(0xe74c3c)
+              .setDescription(`### Hit a mine! Loss: \`${amount}\``),
+          ],
           components: createGridRows(revealedIndices, true),
         });
+
+        logToAudit(interaction.client, {
+          userId,
+          amount: -amount,
+          reason: "Mines Hit",
+        }).catch(() => null);
       } else {
         revealed++;
         revealedIndices.push(index);
         const currentMult = getMultiplier(revealed);
-        const currentProfit = Math.floor(amount * currentMult) - amount;
-
-        const updatedEmbed = EmbedBuilder.from(mainEmbed).setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` | 💣 **Mines:** \`${mineCount}\`\n\n**Multiplier:** \`${currentMult.toFixed(2)}x\`\n**Profit:** \`+${currentProfit.toLocaleString()}\` gold`,
-        );
 
         await i.update({
-          embeds: [updatedEmbed],
+          embeds: [
+            EmbedBuilder.from(mainEmbed).setDescription(
+              `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n\n**Multiplier:** \`${currentMult.toFixed(2)}x\``,
+            ),
+          ],
           components: createGridRows(revealedIndices),
         });
       }
+    });
+
+    collector.on("end", () => {
+      activeMines.delete(userId);
+      clearTimeout(failSafe);
     });
   },
 };
