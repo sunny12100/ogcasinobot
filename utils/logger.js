@@ -1,15 +1,11 @@
 const { EmbedBuilder } = require("discord.js");
 
 /**
- * Sends a formatted log to the Audit Channel
+ * Sends a detailed transaction log to the Audit Channel
  */
 async function logToAudit(client, data) {
   try {
     const auditChannelId = process.env.AUDIT_CHANNEL_ID;
-
-    // 🟢 DEBUG 1: Is the function starting?
-    console.log(`[LOGGER] 📡 Starting log for user: ${data.userId}`);
-    console.log(`[LOGGER] 🆔 Channel ID from .env: ${auditChannelId}`);
 
     if (!auditChannelId) {
       console.error(
@@ -18,51 +14,52 @@ async function logToAudit(client, data) {
       return;
     }
 
-    // Force a fresh fetch from the Discord API instead of relying on cache
-    const channel = await client.channels.fetch(auditChannelId).catch((err) => {
-      console.error(`[LOGGER] ❌ Discord API Error: ${err.message}`);
-      return null;
-    });
+    const channel = await client.channels
+      .fetch(auditChannelId)
+      .catch(() => null);
+    if (!channel) return;
 
-    if (!channel) {
-      console.error(
-        "[LOGGER] ❌ Channel not found. Ensure the Bot is in the server and the ID is correct.",
-      );
-      return;
-    }
-
-    // 🟢 DEBUG 2: Did we find the channel?
-    console.log(`[LOGGER] ✅ Channel Found: #${channel.name}`);
-
-    const embedColor = data.amount >= 0 ? 0x2ecc71 : 0xe74c3c;
-    const sign = data.amount >= 0 ? "+" : "";
+    const isGain = data.amount >= 0;
+    const embedColor = isGain ? 0x2ecc71 : 0xe74c3c; // Green for win/add, Red for loss/remove
+    const statusEmoji = isGain ? "📈" : "📉";
 
     const embed = new EmbedBuilder()
       .setAuthor({
-        name: "Transaction Log",
-        iconURL: "https://i.imgur.com/8f1fXpB.png",
+        name: `Transaction: ${data.reason.split(":")[0]}`, // Pulls game name from reason
+        iconURL: isGain
+          ? "https://i.imgur.com/8f1fXpB.png"
+          : "https://i.imgur.com/97S7F5G.png",
       })
       .setColor(embedColor)
-      .addFields(
-        { name: "👤 Target User", value: `<@${data.userId}>`, inline: true },
-        {
-          name: data.adminId ? "👮 Actioned By" : "🎮 Source",
-          value: data.adminId ? `<@${data.adminId}>` : `Game System`,
-          inline: true,
-        },
-        {
-          name: "💰 Amount Changed",
-          value: `\`${sign}${data.amount.toLocaleString()}\` gold`,
-          inline: true,
-        },
-        { name: "📝 Reason", value: data.reason || "No reason provided" },
+      .setDescription(
+        `### ${statusEmoji} Financial Update\n**User:** <@${data.userId}> (\`${data.userId}\`)`,
       )
+      .addFields(
+        {
+          name: "💵 Transaction Details",
+          value:
+            `> **Wager:** \`${(data.bet || 0).toLocaleString()}\` gold\n` +
+            `> **Net Change:** \`${isGain ? "+" : ""}${data.amount.toLocaleString()}\` gold\n` +
+            `> **Type:** ${data.adminId ? "🛠️ Admin Override" : "🎮 Game Outcome"}`,
+          inline: false,
+        },
+        {
+          name: "🏦 Balance Snapshot",
+          value: `\`${(data.oldBalance || 0).toLocaleString()}\` → \`${(data.newBalance || 0).toLocaleString()}\``,
+          inline: true,
+        },
+        {
+          name: "📝 Full Context",
+          value: `\`\`\`${data.reason || "No context provided"}\`\`\``,
+          inline: false,
+        },
+      )
+      .setFooter({ text: `Server Time` })
       .setTimestamp();
 
     await channel.send({ embeds: [embed] });
-    console.log(`[LOGGER] 🚀 Log successfully sent to Discord!`);
   } catch (error) {
-    console.error("[LOGGER] ❌ Unexpected Error in logger.js:", error);
+    console.error("[LOGGER] ❌ Error in logger.js:", error);
   }
 }
 
