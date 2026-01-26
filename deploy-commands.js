@@ -222,7 +222,7 @@ const commands = [
         .setRequired(true)
         .addChoices(
           { name: "OG (Red)", value: "OG" },
-          { name: "CORGI (Blue)", value: "CORGI" },
+          { name: "SYNDICATE (Blue)", value: "SYNDICATE" },
           { name: "TITAN (Green)", value: "TITAN" },
           { name: "IND (Yellow)", value: "IND" },
         ),

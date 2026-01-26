@@ -15,7 +15,6 @@ module.exports = {
   async execute(interaction, repeatAmount = null) {
     const userId = interaction.user.id;
 
-    // 1. Handling the Interaction Lifecycle
     if (!repeatAmount && !interaction.replied && !interaction.deferred) {
       await interaction.deferReply();
     }
@@ -27,16 +26,19 @@ module.exports = {
         : interaction.editReply({ content: lockMsg });
     }
 
-    const amount = repeatAmount ?? interaction.options.getInteger("amount");
+    let currentBet = repeatAmount ?? interaction.options.getInteger("amount");
 
     try {
       const userData = await User.findOne({ userId });
-      if (!userData || userData.gold < amount) {
+      if (!userData || userData.gold < currentBet) {
         const err = `❌ Not enough gold! Balance: \`${userData?.gold?.toLocaleString() || 0}\``;
         return repeatAmount
           ? interaction.followUp({ content: err, ephemeral: true })
           : interaction.editReply({ content: err });
       }
+
+      // 💾 SNAPSHOT: Initial balance
+      const initialBalance = userData.gold;
 
       activeBlackjack.add(userId);
       const failSafe = setTimeout(() => activeBlackjack.delete(userId), 60000);
@@ -102,17 +104,17 @@ module.exports = {
               inline: true,
             },
           )
-          .setFooter({
-            text: `💰 Bet: ${amount.toLocaleString()} | Balance: ${userData.gold.toLocaleString()}`,
-          });
+          .setFooter({ text: `💰 Bet: ${currentBet.toLocaleString()} | gold` });
       };
 
-      // Define the finishGame function inside try/catch so it has access to scope
       const finishGame = async (reason) => {
         clearTimeout(failSafe);
         activeBlackjack.delete(userId);
 
-        if (reason === "stand") {
+        if (
+          reason === "stand" ||
+          (reason === "bust" && getVal(playerHand) <= 21)
+        ) {
           while (getVal(dealerHand) < 17) dealerHand.push(deck.pop());
         }
 
@@ -123,29 +125,33 @@ module.exports = {
           winType = "loss";
 
         if (reason === "natural") {
-          netChange = Math.floor(amount * 1.5);
+          netChange = Math.floor(currentBet * 1.5);
           statusText = "💰 **NATURAL!** Unstoppable 21!";
           winType = "win";
         } else if (finalPVal > 21) {
-          netChange = -amount;
+          netChange = -currentBet;
           statusText = "💥 **BUST!** You went over.";
         } else if (finalDVal > 21) {
-          netChange = amount;
+          netChange = currentBet;
           statusText = "🏦 **DEALER BUSTS!** You win!";
           winType = "win";
         } else if (finalPVal > finalDVal) {
-          netChange = amount;
+          netChange = currentBet;
           statusText = `✅ **WIN!** ${finalPVal} vs ${finalDVal}`;
           winType = "win";
         } else if (finalPVal < finalDVal) {
-          netChange = -amount;
+          netChange = -currentBet;
           statusText = `❌ **LOSE!** ${finalDVal} beats ${finalPVal}`;
         } else {
           statusText = "🤝 **PUSH.** It's a tie.";
           winType = "push";
         }
 
-        await User.updateOne({ userId }, { $inc: { gold: netChange } });
+        const updatedUser = await User.findOneAndUpdate(
+          { userId },
+          { $inc: { gold: netChange } },
+          { new: true },
+        );
 
         const endEmbed = createEmbed(
           winType === "push"
@@ -164,9 +170,10 @@ module.exports = {
 
         const repeatRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`bj_rep_${amount}`)
+            .setCustomId(`bj_rep_${currentBet}`)
             .setLabel("Play Again")
-            .setStyle(ButtonStyle.Success),
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(updatedUser.gold < currentBet),
           new ButtonBuilder()
             .setCustomId("bj_quit")
             .setLabel("Quit")
@@ -182,36 +189,37 @@ module.exports = {
           componentType: ComponentType.Button,
           time: 15000,
         });
-
         repeatCollector.on("collect", async (btn) => {
           if (btn.user.id !== userId) return;
           if (btn.customId.startsWith("bj_rep_")) {
             await btn.update({ components: [] }).catch(() => null);
             repeatCollector.stop();
-            return this.execute(btn, amount);
+            return module.exports.execute(btn, currentBet);
           }
           await btn.update({ components: [] });
           repeatCollector.stop();
         });
 
+        // ✅ CRUCIAL AUDIT LOG
         logToAudit(interaction.client, {
           userId,
+          bet: currentBet,
           amount: netChange,
+          oldBalance: initialBalance,
+          newBalance: updatedUser.gold,
           reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
         }).catch(() => null);
       };
 
-      // STARTING THE VISUAL GAME
-      const pVal = getVal(playerHand);
-      if (pVal === 21) {
-        // We must editReply first to satisfy Discord, then finish
+      // Initial Check for Natural
+      if (getVal(playerHand) === 21) {
         await interaction.editReply({
           embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, true, "Blackjack!")],
         });
         return finishGame("natural");
       }
 
-      const canDouble = userData.gold >= amount * 2;
+      const canDouble = userData.gold >= currentBet * 2;
       const gameRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("hit")
@@ -228,7 +236,7 @@ module.exports = {
         gameRow.addComponents(
           new ButtonBuilder()
             .setCustomId("double")
-            .setLabel("Double")
+            .setLabel("Double Down")
             .setStyle(ButtonStyle.Danger)
             .setEmoji("💰"),
         );
@@ -242,7 +250,7 @@ module.exports = {
 
       const collector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
-        time: 30000,
+        time: 45000,
       });
 
       collector.on("collect", async (i) => {
@@ -252,7 +260,6 @@ module.exports = {
         if (i.customId === "hit") {
           playerHand.push(deck.pop());
           if (getVal(playerHand) > 21) return collector.stop("bust");
-
           await i.update({
             embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, false, "You hit!")],
             components: [
@@ -263,18 +270,13 @@ module.exports = {
             ],
           });
         } else if (i.customId === "double") {
+          currentBet *= 2; // Double the wager
           playerHand.push(deck.pop());
-          // Double the internal amount for the database update later
-          const originalAmount = amount;
-          const doubleAmount = amount * 2;
-          // Note: Logic inside finishGame will use the scoped 'amount', so we update it here
-          module.exports.execute.amount = doubleAmount;
-
+          await i.deferUpdate();
           collector.stop(getVal(playerHand) > 21 ? "bust" : "stand");
-          await i.deferUpdate();
         } else {
-          collector.stop("stand");
           await i.deferUpdate();
+          collector.stop("stand");
         }
       });
 
@@ -288,11 +290,6 @@ module.exports = {
     } catch (err) {
       console.error(err);
       activeBlackjack.delete(userId);
-      if (interaction.deferred || interaction.replied) {
-        await interaction
-          .editReply({ content: "❌ A system error occurred." })
-          .catch(() => null);
-      }
     }
   },
 };

@@ -130,11 +130,10 @@ module.exports = {
 
           // --- LOGIC ENGINE ---
           if (rollType <= 1) {
-            // 1% GREEN WIN
             resultColor = "green";
             resultNumber = Math.random() < 0.5 ? 0 : "00";
           } else if (rollType <= 48) {
-            // 47% USER WINS
+            // USER WINS
             if (space === "red") {
               resultColor = "red";
               resultNumber =
@@ -152,12 +151,11 @@ module.exports = {
               resultNumber = odds[Math.floor(Math.random() * odds.length)];
               resultColor = redNumbers.includes(resultNumber) ? "red" : "black";
             } else {
-              // Hit green even if they didn't pick it (rare luck)
               resultColor = "red";
               resultNumber = redNumbers[0];
             }
           } else {
-            // 52% HOUSE WINS
+            // HOUSE WINS
             if (space === "red") {
               resultColor = "black";
               resultNumber =
@@ -210,6 +208,7 @@ module.exports = {
           }
 
           const netChange = won ? amount * multiplier - amount : -amount;
+          const oldBalance = userData.gold; // Store before update
 
           const updatedUser = await User.findOneAndUpdate(
             { userId },
@@ -261,9 +260,13 @@ module.exports = {
             repeatCollector.stop();
           });
 
+          // ✅ UPDATED LOG CALL
           logToAudit(interaction.client, {
             userId,
+            bet: amount,
             amount: netChange,
+            oldBalance: oldBalance,
+            newBalance: updatedUser.gold,
             reason: `Roulette: ${space.toUpperCase()} (Ball: ${resultNumber} ${resultColor.toUpperCase()})`,
           }).catch(() => null);
         }, 3000);

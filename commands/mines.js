@@ -8,8 +8,21 @@ const {
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
-// 🔒 Memory lock to prevent double-games
 const activeMines = new Set();
+
+/* ---------------- SAFE INTERACTION HANDLER ---------------- */
+const safeUpdate = async (interaction, payload) => {
+  try {
+    if (interaction.replied || interaction.deferred) return;
+    await interaction.update(payload);
+  } catch (err) {
+    // Ignore expired / unknown interactions
+    if (err.code !== 10062) {
+      console.error("Interaction update error:", err);
+    }
+  }
+};
+/* ---------------------------------------------------------- */
 
 module.exports = {
   name: "mines",
@@ -18,78 +31,79 @@ module.exports = {
     const mineCount = interaction.options.getInteger("mines") || 3;
     const userId = interaction.user.id;
 
-    // 1. Prevent Double Play
     if (activeMines.has(userId)) {
       return interaction.reply({
-        content:
-          "❌ You already have a game in progress! If it crashed, wait 30s.",
+        content: "❌ You already have a mines game running!",
         ephemeral: true,
       });
     }
 
-    const userData = await User.findOne({ userId });
-    if (!userData || userData.gold < amount) {
+    const user = await User.findOne({ userId });
+    if (!user || user.gold < amount) {
       return interaction.reply({
         content: "❌ Not enough gold!",
         ephemeral: true,
       });
     }
 
-    // 2. Set Lock & Initial Deduction
+    const initialBalance = user.gold;
     activeMines.add(userId);
-    // Auto-reset lock after 30s as a fail-safe for errors
-    const failSafe = setTimeout(() => activeMines.delete(userId), 30000);
 
-    userData.gold -= amount;
-    await userData.save();
+    const failSafe = setTimeout(() => activeMines.delete(userId), 120000);
+
+    await User.updateOne({ userId }, { $inc: { gold: -amount } });
 
     let revealed = 0;
     let isGameOver = false;
-    const grid = Array(25).fill("gem");
-    const minePositions = [];
+    const revealedIndices = [];
 
-    while (minePositions.length < mineCount) {
-      const r = Math.floor(Math.random() * 25);
-      if (!minePositions.includes(r)) {
-        minePositions.push(r);
-        grid[r] = "mine";
-      }
+    /* ---------------- GRID SETUP ---------------- */
+    const grid = Array(25).fill("gem");
+    const mines = new Set();
+
+    while (mines.size < mineCount) {
+      mines.add(Math.floor(Math.random() * 25));
     }
+    for (const i of mines) grid[i] = "mine";
+    /* -------------------------------------------- */
 
     const getMultiplier = (rev) => {
-      if (rev === 0) return 1.0;
-      let mult = 1.0;
+      if (rev === 0) return 1;
+      let prob = 1;
       for (let i = 0; i < rev; i++) {
-        mult *= (25 - i) / (25 - i - mineCount);
+        prob *= (25 - mineCount - i) / (25 - i);
       }
-      const scalingFactor = rev <= 2 ? 0.82 : 0.94;
-      return mult * scalingFactor;
+      return (1 / prob) * 0.92; // 8% house edge
     };
 
-    const createGridRows = (revealedIndices = [], showMines = false) => {
+    const createGrid = (showMines = false) => {
       const rows = [];
+
       for (let i = 0; i < 5; i++) {
         const row = new ActionRowBuilder();
+
         for (let j = 0; j < 5; j++) {
-          const index = i * 5 + j;
-          if (index === 24 && !isGameOver) {
-            const currentMult = getMultiplier(revealed);
-            const cashoutVal = Math.floor(amount * currentMult);
+          const idx = i * 5 + j;
+
+          if (idx === 24 && !isGameOver) {
+            const mult = getMultiplier(revealed);
+            const cashout = Math.floor(amount * mult);
+
             row.addComponents(
               new ButtonBuilder()
                 .setCustomId("mine_cashout")
-                .setLabel(
-                  revealed > 0 ? `Cash Out (${cashoutVal})` : "Cash Out",
-                )
+                .setLabel(revealed > 0 ? `Cash Out (${cashout})` : "Cash Out")
                 .setStyle(ButtonStyle.Success)
                 .setDisabled(revealed === 0),
             );
             continue;
           }
-          const btn = new ButtonBuilder().setCustomId(`mine_${index}`);
-          if (revealedIndices.includes(index)) {
+
+          const btn = new ButtonBuilder().setCustomId(`mine_${idx}`);
+
+          if (revealedIndices.includes(idx)) {
             btn.setLabel("💎").setStyle(ButtonStyle.Primary).setDisabled(true);
-          } else if (showMines && grid[index] === "mine") {
+          } else if (showMines && grid[idx] === "mine") {
             btn.setLabel("💣").setStyle(ButtonStyle.Danger).setDisabled(true);
           } else {
             btn
@@ -97,6 +111,7 @@ module.exports = {
               .setStyle(ButtonStyle.Secondary)
               .setDisabled(isGameOver);
           }
+
           row.addComponents(btn);
         }
         rows.push(row);
@@ -104,7 +119,7 @@ module.exports = {
       return rows;
     };
 
-    const mainEmbed = new EmbedBuilder()
+    const baseEmbed = new EmbedBuilder()
       .setTitle("💣 PREMIER MINES")
       .setColor(0xffaa00)
       .setDescription(
@@ -112,95 +127,120 @@ module.exports = {
       );
 
     const msg = await interaction.reply({
-      embeds: [mainEmbed],
-      components: createGridRows(),
+      embeds: [baseEmbed],
+      components: createGrid(),
       fetchReply: true,
     });
 
     const collector = msg.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 60000, // 1 minute per game
+      time: 120000,
     });
-
-    const revealedIndices = [];
 
     collector.on("collect", async (i) => {
       if (i.user.id !== userId)
-        return i.reply({ content: "Not your game!", ephemeral: true });
+        return i.reply({ content: "❌ Not your game!", ephemeral: true });
 
+      if (isGameOver) return;
+
+      /* ---------- CASHOUT ---------- */
       if (i.customId === "mine_cashout") {
         isGameOver = true;
-        clearTimeout(failSafe);
-        activeMines.delete(userId);
-        collector.stop();
 
-        const finalMult = getMultiplier(revealed);
-        const winAmount = Math.floor(amount * finalMult);
+        const mult = getMultiplier(revealed);
+        const win = Math.floor(amount * mult);
 
-        // Response first to avoid 10062
-        await i.update({
+        const updatedUser = await User.findOneAndUpdate(
+          { userId },
+          { $inc: { gold: win } },
+          { new: true },
+        );
+
+        await safeUpdate(i, {
           embeds: [
-            EmbedBuilder.from(mainEmbed)
-              .setTitle("💰 CASHOUT")
+            EmbedBuilder.from(baseEmbed)
+              .setTitle("💰 CASHED OUT")
               .setColor(0x2ecc71)
               .setDescription(
-                `### Payout: **${winAmount.toLocaleString()} gold**`,
+                `### Won **${win} gold**\nMultiplier: \`${mult.toFixed(2)}x\``,
               ),
           ],
-          components: createGridRows(revealedIndices, true),
+          components: createGrid(true),
         });
 
-        // Async DB update
-        await User.updateOne({ userId }, { $inc: { gold: winAmount } });
-        logToAudit(interaction.client, {
+        collector.stop("cashout");
+
+        await logToAudit(interaction.client, {
           userId,
-          amount: winAmount - amount,
-          reason: "Mines Cashout",
+          bet: amount,
+          amount: win - amount,
+          oldBalance: initialBalance,
+          newBalance: updatedUser.gold,
+          reason: `Mines Cashout (${revealed} gems)`,
         }).catch(() => null);
+
         return;
       }
 
-      const index = parseInt(i.customId.split("_")[1]);
-      if (grid[index] === "mine") {
-        isGameOver = true;
-        clearTimeout(failSafe);
-        activeMines.delete(userId);
-        collector.stop();
+      /* ---------- TILE CLICK ---------- */
+      const idx = Number(i.customId.split("_")[1]);
 
-        await i.update({
+      if (grid[idx] === "mine") {
+        isGameOver = true;
+        const lostUser = await User.findOne({ userId });
+
+        await safeUpdate(i, {
           embeds: [
-            EmbedBuilder.from(mainEmbed)
+            EmbedBuilder.from(baseEmbed)
               .setTitle("💥 BOOM!")
               .setColor(0xe74c3c)
-              .setDescription(`### Hit a mine! Loss: \`${amount}\``),
+              .setDescription(`### You hit a mine!\nLost **${amount} gold**`),
           ],
-          components: createGridRows(revealedIndices, true),
+          components: createGrid(true),
         });
 
-        logToAudit(interaction.client, {
+        collector.stop("mine");
+
+        await logToAudit(interaction.client, {
           userId,
+          bet: amount,
           amount: -amount,
-          reason: "Mines Hit",
+          oldBalance: initialBalance,
+          newBalance: lostUser.gold,
+          reason: "Mines Hit Mine",
         }).catch(() => null);
-      } else {
-        revealed++;
-        revealedIndices.push(index);
-        const currentMult = getMultiplier(revealed);
 
-        await i.update({
-          embeds: [
-            EmbedBuilder.from(mainEmbed).setDescription(
-              `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n\n**Multiplier:** \`${currentMult.toFixed(2)}x\``,
-            ),
-          ],
-          components: createGridRows(revealedIndices),
-        });
+        return;
       }
+
+      /* ---------- SAFE TILE ---------- */
+      revealed++;
+      revealedIndices.push(idx);
+      const mult = getMultiplier(revealed);
+
+      await safeUpdate(i, {
+        embeds: [
+          EmbedBuilder.from(baseEmbed).setDescription(
+            `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n\n**Multiplier:** \`${mult.toFixed(
+              2,
+            )}x\``,
+          ),
+        ],
+        components: createGrid(),
+      });
     });
 
-    collector.on("end", () => {
+    collector.on("end", async (_, reason) => {
       activeMines.delete(userId);
       clearTimeout(failSafe);
+
+      if (!isGameOver && reason === "time") {
+        try {
+          await interaction.editReply({
+            components: createGrid(true),
+          });
+        } catch {}
+      }
     });
   },
 };

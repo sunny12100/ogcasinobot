@@ -1,5 +1,5 @@
 const { EmbedBuilder } = require("discord.js");
-const User = require("../models/User"); // Import your Mongoose model
+const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
 module.exports = {
@@ -10,17 +10,16 @@ module.exports = {
     const senderId = interaction.user.id;
     const receiverId = target.id;
 
-    // 1. Check if paying self or a bot
     if (senderId === receiverId) {
       return interaction.reply({
-        content: "🤨 You can't pay yourself, buddy. Nice try!",
+        content: "🤨 You can't pay yourself, buddy.",
         ephemeral: true,
       });
     }
 
     if (target.bot) {
       return interaction.reply({
-        content: "🤖 Bots don't need gold. They run on electricity!",
+        content: "🤖 Bots don't need gold!",
         ephemeral: true,
       });
     }
@@ -32,66 +31,78 @@ module.exports = {
       });
     }
 
-    // 2. Fetch both users from MongoDB
-    const senderData = await User.findOne({ userId: senderId });
-    const receiverData = await User.findOne({ userId: receiverId });
+    try {
+      // Fetch both users
+      const senderData = await User.findOne({ userId: senderId });
+      const receiverData = await User.findOne({ userId: receiverId });
 
-    // 3. Check sender verification
-    if (!senderData) {
-      return interaction.reply({
-        content: "❌ You are not registered! Please register first.",
+      if (!senderData)
+        return interaction.reply({
+          content: "❌ You are not registered!",
+          ephemeral: true,
+        });
+      if (!receiverData)
+        return interaction.reply({
+          content: `❌ **Transfer Failed:** ${target} is not registered.`,
+          ephemeral: true,
+        });
+
+      if (senderData.gold < amount) {
+        return interaction.reply({
+          content: `❌ You don't have enough gold!`,
+          ephemeral: true,
+        });
+      }
+
+      // --- SNAPSHOTS FOR AUDIT ---
+      const senderOldBalance = senderData.gold;
+      const receiverOldBalance = receiverData.gold;
+
+      // --- EXECUTE TRANSFER ---
+      senderData.gold -= amount;
+      receiverData.gold += amount;
+
+      await senderData.save();
+      await receiverData.save();
+
+      // ✅ LOG FOR SENDER (The person who lost gold)
+      await logToAudit(interaction.client, {
+        userId: senderId,
+        amount: -amount, // Negative because gold left
+        oldBalance: senderOldBalance,
+        newBalance: senderData.gold,
+        reason: `P2P Transfer: Sent to ${target.tag}`,
+      }).catch(() => null);
+
+      // ✅ LOG FOR RECEIVER (The person who gained gold)
+      await logToAudit(interaction.client, {
+        userId: receiverId,
+        amount: amount, // Positive because gold arrived
+        oldBalance: receiverOldBalance,
+        newBalance: receiverData.gold,
+        reason: `P2P Transfer: Received from ${interaction.user.tag}`,
+      }).catch(() => null);
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle("💸 TRANSFER SUCCESSFUL")
+        .setColor(0x5865f2)
+        .setThumbnail(
+          "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2ppeDU1eXVxazEzNDU0ZGVycDJ3MnkyMm51empmMGF2OHE2YWthNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ZVr17jubM740M8tgkU/giphy.gif",
+        )
+        .setDescription(
+          `✅ **Sent:** \`${amount.toLocaleString()}\` gold\n` +
+            `👤 **To:** ${target}\n\n` +
+            `🏦 **Your New Balance:** \`${senderData.gold.toLocaleString()}\` gold`,
+        )
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [successEmbed] });
+    } catch (err) {
+      console.error(err);
+      interaction.reply({
+        content: "❌ Internal error during transfer.",
         ephemeral: true,
       });
     }
-
-    // 4. Check receiver verification
-    if (!receiverData) {
-      return interaction.reply({
-        content: `❌ **Transfer Failed:** ${target} is not a registered user. They must register before they can receive gold.`,
-        ephemeral: true,
-      });
-    }
-
-    // 5. Check sender balance
-    if (senderData.gold < amount) {
-      return interaction.reply({
-        content: `❌ You don't have enough gold! (Current Balance: \`${senderData.gold.toLocaleString()}\`)`,
-        ephemeral: true,
-      });
-    }
-
-    // --- EXECUTE TRANSFER ---
-    senderData.gold -= amount;
-    receiverData.gold += amount;
-
-    // Save both documents
-    await senderData.save();
-    await receiverData.save();
-
-    // ✅ 6. Log to Audit Channel
-    // We pass adminId as the sender so the log shows WHO moved the money
-    await logToAudit(interaction.client, {
-      userId: receiverId,
-      adminId: senderId,
-      amount: amount,
-      reason: `P2P Transfer: ${interaction.user.tag} ➔ ${target.tag}`,
-    }).catch((err) => console.error("Logger Error (Pay):", err));
-
-    const successEmbed = new EmbedBuilder()
-      .setTitle("💸 TRANSFER SUCCESSFUL")
-      .setColor(0x5865f2)
-      .setThumbnail(
-        "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2ppeDU1eXVxazEzNDU0ZGVycDJ3MnkyMm51empmMGF2OHE2YWthNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ZVr17jubM740M8tgkU/giphy.gif",
-      )
-      .setDescription(
-        `✅ **Sent:** \`${amount.toLocaleString()}\` gold\n` +
-          `👤 **From:** ${interaction.user}\n` +
-          `👤 **To:** ${target}\n\n` +
-          `🏦 **Your New Balance:** \`${senderData.gold.toLocaleString()}\` gold`,
-      )
-      .setTimestamp()
-      .setFooter({ text: "Peer-to-Peer Transfer Complete" });
-
-    await interaction.reply({ embeds: [successEmbed] });
   },
 };

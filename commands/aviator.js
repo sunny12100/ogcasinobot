@@ -8,47 +8,42 @@ const {
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
-// 🔒 Global Lock for Aviator
 const activeAviator = new Set();
 
 module.exports = {
   name: "aviator",
-  async execute(interaction, repeatAmount = null) {
+  async execute(interaction) {
+    // Removed repeatAmount parameter
     const userId = interaction.user.id;
 
-    // 1. Handle Deferral (Prevents 10062 error)
-    // If it's a repeat, the button was already deferred/updated
-    if (!repeatAmount && !interaction.replied && !interaction.deferred) {
+    if (!interaction.replied && !interaction.deferred) {
       await interaction.deferReply();
     }
 
-    const amount = repeatAmount ?? interaction.options.getInteger("amount");
+    const amount = interaction.options.getInteger("amount");
 
-    // 2. Double Play Prevention
     if (activeAviator.has(userId)) {
-      const lockMsg = "❌ You already have a flight in progress!";
-      return repeatAmount
-        ? interaction.followUp({ content: lockMsg, ephemeral: true })
-        : interaction.editReply({ content: lockMsg });
+      return interaction.editReply({
+        content: "❌ You already have a flight in progress!",
+        ephemeral: true,
+      });
     }
 
     try {
-      // 3. Database Check
+      // 1. Database Check & Pre-game snapshot
       const userData = await User.findOne({ userId });
       if (!userData || userData.gold < amount) {
-        const goldMsg = "❌ Not enough gold!";
-        return repeatAmount
-          ? interaction.followUp({ content: goldMsg, ephemeral: true })
-          : interaction.editReply({ content: goldMsg });
+        return interaction.editReply({ content: "❌ Not enough gold!" });
       }
 
-      // 4. Set Lock & Initial Deduction
+      const initialBalance = userData.gold;
       activeAviator.add(userId);
       const failSafe = setTimeout(() => activeAviator.delete(userId), 65000);
 
+      // Deduct bet immediately
       await User.updateOne({ userId }, { $inc: { gold: -amount } });
 
-      // 5. Game Logic
+      // 2. Game Logic (Crash Point)
       const roll = Math.random();
       let crashPoint;
       if (roll < 0.43) crashPoint = 1.2 + Math.random() * 0.3;
@@ -94,7 +89,6 @@ module.exports = {
       const msg = await interaction.editReply({
         embeds: [createEmbed(currentMultiplier)],
         components: [gameRow],
-        fetchReply: true,
       });
 
       const collector = msg.createMessageComponentCollector({
@@ -102,7 +96,7 @@ module.exports = {
         time: 60000,
       });
 
-      // 6. Smooth Game Loop
+      // 3. Game Loop
       const gameLoop = setInterval(async () => {
         if (!gameActive) return clearInterval(gameLoop);
 
@@ -128,84 +122,63 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your flight!", ephemeral: true });
-
         gameActive = false;
         clearInterval(gameLoop);
-        collector.stop("cashed_out");
         await i.deferUpdate();
+        collector.stop("cashed_out");
       });
 
       collector.on("end", async (_, reason) => {
         clearTimeout(failSafe);
         activeAviator.delete(userId);
 
+        let finalUser;
         let winAmount = 0;
+
         if (reason === "cashed_out") {
           winAmount = Math.floor(amount * currentMultiplier);
-          await User.updateOne({ userId }, { $inc: { gold: winAmount } });
+          finalUser = await User.findOneAndUpdate(
+            { userId },
+            { $inc: { gold: winAmount } },
+            { new: true },
+          );
+        } else {
+          finalUser = await User.findOne({ userId });
         }
+
+        // Logic sync for Audit Log
+        const netProfit = finalUser.gold - initialBalance;
 
         const endEmbed = new EmbedBuilder()
           .setTitle(reason === "cashed_out" ? "💰 PROFIT SECURED" : "🔥 KABOOM")
           .setColor(reason === "cashed_out" ? 0x2ecc71 : 0xe74c3c)
           .setDescription(
             reason === "cashed_out"
-              ? `💵 **Exited at \`${currentMultiplier.toFixed(2)}x\`**\nWin: \`+${(winAmount - amount).toLocaleString()}\` gold`
-              : `💥 **Crashed at \`${crashPoint}x\`**\nLoss: \`-${amount.toLocaleString()}\` gold`,
+              ? `💵 **Exited at \`${currentMultiplier.toFixed(2)}x\`**\nProfit: \`+${netProfit.toLocaleString()}\` gold\n🏦 **Balance:** \`${finalUser.gold.toLocaleString()}\``
+              : `💥 **Crashed at \`${crashPoint}x\`**\nLoss: \`-${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${finalUser.gold.toLocaleString()}\``,
           );
 
-        const endRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`avi_rep_${amount}`)
-            .setLabel("Fly Again")
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId("avi_quit")
-            .setLabel("Quit")
-            .setStyle(ButtonStyle.Secondary),
-        );
+        // UI Fix: Removed the ActionRow with the "Fly Again" button
+        await interaction
+          .editReply({
+            embeds: [endEmbed],
+            components: [], // Empty components to clear buttons
+          })
+          .catch(() => null);
 
-        const finalResponse = await interaction.editReply({
-          embeds: [endEmbed],
-          components: [endRow],
-        });
-
-        // --- FLY AGAIN COLLECTOR ---
-        const repeatCollector = finalResponse.createMessageComponentCollector({
-          componentType: ComponentType.Button,
-          time: 15000,
-        });
-
-        repeatCollector.on("collect", async (btnInt) => {
-          if (btnInt.user.id !== userId) return;
-
-          if (btnInt.customId.startsWith("avi_rep_")) {
-            await btnInt.update({ components: [] }).catch(() => null);
-            repeatCollector.stop();
-            // Restarts the function
-            return module.exports.execute(btnInt, amount);
-          }
-
-          if (btnInt.customId === "avi_quit") {
-            await btnInt.update({ components: [] }).catch(() => null);
-            repeatCollector.stop();
-          }
-        });
-
-        logToAudit(interaction.client, {
-          userId,
-          amount: reason === "cashed_out" ? winAmount - amount : -amount,
-          reason: `Aviator ${reason}`,
+        // ✅ FINAL AUDIT LOG
+        await logToAudit(interaction.client, {
+          userId: userId,
+          bet: amount,
+          amount: netProfit,
+          oldBalance: initialBalance,
+          newBalance: finalUser.gold,
+          reason: `Aviator: ${reason.toUpperCase()} (Multiplier: ${currentMultiplier.toFixed(2)}x)`,
         }).catch(() => null);
       });
     } catch (error) {
       console.error("Aviator Error:", error);
       activeAviator.delete(userId);
-      if (interaction.deferred || interaction.replied) {
-        await interaction
-          .editReply({ content: "❌ An error occurred." })
-          .catch(() => null);
-      }
     }
   },
 };

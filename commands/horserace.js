@@ -11,22 +11,31 @@ module.exports = {
     const chosenHorse = interaction.options.getString("horse");
     const userId = interaction.user.id;
 
-    // 1. Check for active race
     if (activeRaces.has(userId)) {
       return interaction.reply({
-        content:
-          "❌ You already have a race in progress! If this is a bug, wait 30 seconds.",
+        content: "❌ You already have a race in progress!",
         ephemeral: true,
       });
     }
 
     activeRaces.add(userId);
-
-    // 2. Fail-safe: Auto-remove the lock after 60 seconds no matter what
-    setTimeout(() => activeRaces.delete(userId), 60000);
+    const failSafe = setTimeout(() => activeRaces.delete(userId), 90000);
 
     try {
-      // 3. Atomic deduction
+      // 1. Get pre-game data for the audit snapshot
+      const preGameUser = await User.findOne({ userId });
+      if (!preGameUser || preGameUser.gold < amount) {
+        activeRaces.delete(userId);
+        clearTimeout(failSafe);
+        return interaction.reply({
+          content: "❌ Not enough gold!",
+          ephemeral: true,
+        });
+      }
+
+      const initialBalance = preGameUser.gold;
+
+      // 2. Atomic deduction (Charge the user immediately)
       const userData = await User.findOneAndUpdate(
         { userId, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -34,23 +43,22 @@ module.exports = {
       );
 
       if (!userData) {
-        activeRaces.delete(userId); // Release lock if they can't afford it
+        activeRaces.delete(userId);
+        clearTimeout(failSafe);
         return interaction.reply({
-          content: "❌ Not enough gold!",
+          content: "❌ Transaction failed. Try again.",
           ephemeral: true,
         });
       }
 
       const horses = [
         { name: "OG", emoji: "🔴", pos: 0 },
-        { name: "CORGI", emoji: "🔵", pos: 0 },
+        { name: "SYNDICATE", emoji: "🔵", pos: 0 },
         { name: "TITAN", emoji: "🟢", pos: 0 },
         { name: "IND", emoji: "🟡", pos: 0 },
       ];
 
       const finishLine = 15;
-      let winner = null;
-
       const generateTrack = () => {
         let track = "```js\n";
         horses.forEach((h) => {
@@ -75,48 +83,62 @@ module.exports = {
       });
 
       const interval = setInterval(async () => {
-        // Move horses
         horses.forEach((h) => {
-          if (Math.random() > 0.5) h.pos++;
+          const boost = Math.random();
+          if (boost > 0.7) h.pos += 2;
+          else if (boost > 0.4) h.pos += 1;
         });
 
         const finishers = horses.filter((h) => h.pos >= finishLine - 1);
 
         if (finishers.length > 0) {
           clearInterval(interval);
-          activeRaces.delete(userId); // CLEAR LOCK HERE
+          clearTimeout(failSafe);
+          activeRaces.delete(userId);
 
-          winner = finishers[Math.floor(Math.random() * finishers.length)];
+          const winner =
+            finishers[Math.floor(Math.random() * finishers.length)];
           const won = winner.name === chosenHorse;
           const winnings = amount * 2;
 
-          let finalBalance = userData.gold;
-
+          let finalUser;
           if (won) {
-            const updatedUser = await User.findOneAndUpdate(
+            // Give 2x back (Original bet + profit)
+            finalUser = await User.findOneAndUpdate(
               { userId },
               { $inc: { gold: winnings } },
               { new: true },
             );
-            finalBalance = updatedUser.gold;
+          } else {
+            // Gold was already deducted, just get current state
+            finalUser = await User.findOne({ userId });
           }
 
+          // 🛠️ LOGIC FIX: Determine change by comparing final state to initial state
+          const netChange = finalUser.gold - initialBalance;
+
+          // 3. LOG TO AUDIT (Awaited for stability)
           await logToAudit(interaction.client, {
             userId,
-            amount: won ? winnings - amount : -amount,
+            bet: amount,
+            amount: netChange,
+            oldBalance: initialBalance,
+            newBalance: finalUser.gold,
             reason: `Horse Race: ${chosenHorse} (Winner: ${winner.name})`,
           }).catch(() => null);
 
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle(won ? "🎉 VICTORY!" : "📉 DEFEAT")
-                .setColor(won ? 0x2ecc71 : 0xe74c3c)
-                .setDescription(
-                  `### Winner: ${winner.emoji} ${winner.name}\n\n${generateTrack()}\n\n💰 **Result:** \`${won ? "+" : "-"}${won ? (winnings - amount).toLocaleString() : amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${finalBalance.toLocaleString()}\` gold`,
-                ),
-            ],
-          });
+          return interaction
+            .editReply({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle(won ? "🎉 VICTORY!" : "📉 DEFEAT")
+                  .setColor(won ? 0x2ecc71 : 0xe74c3c)
+                  .setDescription(
+                    `### Winner: ${winner.emoji} ${winner.name}\n\n${generateTrack()}\n\n💰 **Result:** \`${won ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **Balance:** \`${finalUser.gold.toLocaleString()}\` gold`,
+                  ),
+              ],
+            })
+            .catch(() => null);
         }
 
         // Live Update
@@ -127,18 +149,20 @@ module.exports = {
                 .setTitle("🏇 RACE IN PROGRESS")
                 .setColor(0x00aaff)
                 .setDescription(
-                  `👤 **Bettor:** <@${userId}>\n💰 **Bet:** \`${amount}\` on **${chosenHorse}**\n\n${generateTrack()}`,
+                  `👤 **Bettor:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` on **${chosenHorse}**\n\n${generateTrack()}`,
                 ),
             ],
           })
           .catch(() => {
             clearInterval(interval);
+            clearTimeout(failSafe);
             activeRaces.delete(userId);
           });
-      }, 1200);
+      }, 2000);
     } catch (error) {
-      console.error(error);
-      activeRaces.delete(userId); // ENSURE LOCK IS CLEARED ON ERROR
+      console.error("Horse Race Error:", error);
+      activeRaces.delete(userId);
+      clearTimeout(failSafe);
     }
   },
 };
