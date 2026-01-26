@@ -9,7 +9,6 @@ const {
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
-// 🔒 Memory lock to prevent double-games
 const activeRoulette = new Set();
 
 module.exports = {
@@ -17,7 +16,6 @@ module.exports = {
   async execute(interaction, repeatAmount = null) {
     const userId = interaction.user.id;
 
-    // 1. DEFER & LOCK CHECK
     if (!repeatAmount && !interaction.replied && !interaction.deferred) {
       await interaction.deferReply();
     }
@@ -32,7 +30,6 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
 
     try {
-      // 2. FETCH USER & VALIDATE
       const userData = await User.findOne({ userId });
       if (!userData || userData.gold < amount) {
         const err = `❌ Not enough gold! Balance: \`${userData?.gold?.toLocaleString() || 0}\``;
@@ -41,7 +38,6 @@ module.exports = {
           : interaction.editReply({ content: err });
       }
 
-      // Set Lock
       activeRoulette.add(userId);
       const failSafe = setTimeout(() => activeRoulette.delete(userId), 45000);
 
@@ -88,23 +84,21 @@ module.exports = {
           "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcTRzYnljc3ozbzk5cG9xb2ozNDNrczR5bDJ1OXdkOXR2OXd5aDlvdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uflBhaGt5lQsaCA/giphy.gif",
         )
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet Amount:** \`${amount.toLocaleString()}\` gold\n\n*Select an option to spin!*`,
+          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\n*Select an option to spin!*`,
         );
 
-      const response = await interaction.editReply({
+      await interaction.editReply({
         embeds: [initialEmbed],
         components: [new ActionRowBuilder().addComponents(menu)],
       });
 
-      const collector = response.createMessageComponentCollector({
+      const collector = interaction.channel.createMessageComponentCollector({
+        filter: (i) => i.user.id === userId && i.customId === "roulette_bet",
         componentType: ComponentType.StringSelect,
         time: 30000,
       });
 
       collector.on("collect", async (i) => {
-        if (i.user.id !== userId)
-          return i.reply({ content: "Not your game!", ephemeral: true });
-
         const space = i.values[0];
 
         await i.update({
@@ -119,61 +113,75 @@ module.exports = {
           components: [],
         });
 
-        // 3. SPIN LOGIC
         setTimeout(async () => {
           clearTimeout(failSafe);
           activeRoulette.delete(userId);
 
-          const rollType = Math.random() * 100;
-          let resultColor, resultNumber;
           const redNumbers = [
             1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36,
           ];
           const blackNumbers = [
             2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35,
           ];
+          const allNumbers = [...redNumbers, ...blackNumbers];
 
-          // Probability Engine
+          let resultColor, resultNumber;
+          const rollType = Math.random() * 100;
+
+          // --- LOGIC ENGINE ---
           if (rollType <= 1) {
-            // 1% Green
+            // 1% GREEN WIN
             resultColor = "green";
             resultNumber = Math.random() < 0.5 ? 0 : "00";
           } else if (rollType <= 48) {
-            // 47% Hit user choice
-            resultColor =
-              space === "red" || space === "black"
-                ? space
-                : Math.random() < 0.5
-                  ? "red"
-                  : "black";
-
-            if (space === "even")
-              resultNumber = 2; // Simple representation
-            else if (space === "odd") resultNumber = 3;
-            else
+            // 47% USER WINS
+            if (space === "red") {
+              resultColor = "red";
               resultNumber =
-                resultColor === "red" ? redNumbers[0] : blackNumbers[0];
+                redNumbers[Math.floor(Math.random() * redNumbers.length)];
+            } else if (space === "black") {
+              resultColor = "black";
+              resultNumber =
+                blackNumbers[Math.floor(Math.random() * blackNumbers.length)];
+            } else if (space === "even") {
+              const evens = allNumbers.filter((n) => n % 2 === 0);
+              resultNumber = evens[Math.floor(Math.random() * evens.length)];
+              resultColor = redNumbers.includes(resultNumber) ? "red" : "black";
+            } else if (space === "odd") {
+              const odds = allNumbers.filter((n) => n % 2 !== 0);
+              resultNumber = odds[Math.floor(Math.random() * odds.length)];
+              resultColor = redNumbers.includes(resultNumber) ? "red" : "black";
+            } else {
+              // Hit green even if they didn't pick it (rare luck)
+              resultColor = "red";
+              resultNumber = redNumbers[0];
+            }
           } else {
-            // 52% House Win
+            // 52% HOUSE WINS
             if (space === "red") {
               resultColor = "black";
-              resultNumber = 2;
+              resultNumber =
+                blackNumbers[Math.floor(Math.random() * blackNumbers.length)];
             } else if (space === "black") {
               resultColor = "red";
-              resultNumber = 1;
+              resultNumber =
+                redNumbers[Math.floor(Math.random() * redNumbers.length)];
             } else if (space === "even") {
-              resultColor = "red";
-              resultNumber = 3;
+              const odds = allNumbers.filter((n) => n % 2 !== 0);
+              resultNumber = odds[Math.floor(Math.random() * odds.length)];
+              resultColor = redNumbers.includes(resultNumber) ? "red" : "black";
             } else if (space === "odd") {
-              resultColor = "black";
-              resultNumber = 4;
+              const evens = allNumbers.filter((n) => n % 2 === 0);
+              resultNumber = evens[Math.floor(Math.random() * evens.length)];
+              resultColor = redNumbers.includes(resultNumber) ? "red" : "black";
             } else {
-              resultColor = "black";
-              resultNumber = 2;
+              resultColor = Math.random() < 0.5 ? "red" : "black";
+              resultNumber =
+                resultColor === "red" ? redNumbers[0] : blackNumbers[0];
             }
           }
 
-          // 4. WIN EVALUATION
+          // --- EVALUATION ---
           let won = false;
           let multiplier = 0;
 
@@ -183,14 +191,16 @@ module.exports = {
           } else if (
             space === "even" &&
             resultColor !== "green" &&
-            parseInt(resultNumber) % 2 === 0
+            resultNumber !== "00" &&
+            resultNumber % 2 === 0
           ) {
             won = true;
             multiplier = 2;
           } else if (
             space === "odd" &&
             resultColor !== "green" &&
-            parseInt(resultNumber) % 2 !== 0
+            resultNumber !== "00" &&
+            resultNumber % 2 !== 0
           ) {
             won = true;
             multiplier = 2;
@@ -201,7 +211,6 @@ module.exports = {
 
           const netChange = won ? amount * multiplier - amount : -amount;
 
-          // Atomic Update
           const updatedUser = await User.findOneAndUpdate(
             { userId },
             { $inc: { gold: netChange } },
@@ -222,8 +231,9 @@ module.exports = {
           const repeatRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setCustomId(`roulette_rep_${amount}`)
-              .setLabel(`Bet Again (${amount.toLocaleString()})`)
-              .setStyle(ButtonStyle.Success),
+              .setLabel(`Bet Again (${amount})`)
+              .setStyle(ButtonStyle.Success)
+              .setDisabled(updatedUser.gold < amount),
             new ButtonBuilder()
               .setCustomId("roulette_quit")
               .setLabel("Quit")
@@ -235,7 +245,6 @@ module.exports = {
             components: [repeatRow],
           });
 
-          // 5. REPEAT COLLECTOR
           const repeatCollector = finalMsg.createMessageComponentCollector({
             componentType: ComponentType.Button,
             time: 15000,
@@ -258,7 +267,6 @@ module.exports = {
             reason: `Roulette: ${space.toUpperCase()} (Ball: ${resultNumber} ${resultColor.toUpperCase()})`,
           }).catch(() => null);
         }, 3000);
-
         collector.stop();
       });
 
