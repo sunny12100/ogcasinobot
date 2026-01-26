@@ -32,9 +32,9 @@ const commands = [
     .addIntegerOption((option) =>
       option
         .setName("amount")
-        .setDescription("Amount of gold to bet (50-500)")
+        .setDescription("Amount of gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -44,9 +44,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -56,9 +56,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -68,9 +68,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -80,9 +80,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -92,9 +92,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -108,11 +108,12 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     ),
+
   new SlashCommandBuilder()
     .setName("add-gold")
     .setDescription("Admin: Add gold to a user")
@@ -148,6 +149,7 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+
   new SlashCommandBuilder()
     .setName("pay")
     .setDescription("Transfer gold to another verified player")
@@ -161,6 +163,7 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+
   new SlashCommandBuilder()
     .setName("stats")
     .setDescription("Admin: View global economy statistics")
@@ -182,18 +185,20 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("View the casino guide and game payouts"),
+
   new SlashCommandBuilder()
     .setName("mines")
     .setDescription("Play Mines! Find gems and avoid the bombs.")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     )
     .addIntegerOption((opt) =>
@@ -204,15 +209,16 @@ const commands = [
         .setMinValue(1)
         .setMaxValue(20),
     ),
+
   new SlashCommandBuilder()
     .setName("horserace")
     .setDescription("Bet on a horse race!")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-500)")
+        .setDescription("Gold to bet (25-500)")
         .setRequired(true)
-        .setMinValue(50)
+        .setMinValue(25) // Updated to 25
         .setMaxValue(500),
     )
     .addStringOption((opt) =>
@@ -233,7 +239,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 (async () => {
   try {
-    console.log("🔄 Updating command list with 50-500 limits...");
+    console.log("🔄 Updating command list with 25-500 limits...");
 
     await rest.put(
       Routes.applicationGuildCommands(
@@ -242,7 +248,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
       ),
       { body: commands },
     );
-    console.log("✅ Commands updated! Limits are now live in Discord.");
+    console.log("✅ Commands updated! Minimum bet is now 25.");
   } catch (err) {
     console.error(err);
   }

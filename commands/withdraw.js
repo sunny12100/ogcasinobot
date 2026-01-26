@@ -9,6 +9,13 @@ module.exports = {
     const amount = interaction.options.getInteger("amount");
     const customAccount = interaction.options.getString("account");
 
+    // --- NEW VALIDATION: 50 GOLD MINIMUM ---
+    if (amount < 50) {
+      return interaction.editReply(
+        "❌ **Withdrawal Failed:** The minimum amount you can withdraw is `50` gold.",
+      );
+    }
+
     // 2. Fetch User from MongoDB
     const userData = await User.findOne({ userId: interaction.user.id });
 
@@ -25,8 +32,8 @@ module.exports = {
 
     const target = customAccount || userData.ttio;
 
-    // 4. Calculate Payout (5% fee in this version)
-    const fee = Math.ceil(amount * 0.05);
+    // 4. Calculate Payout (Aligned to 3% fee as per setup panel)
+    const fee = Math.ceil(amount * 0.03);
     const finalAmount = amount - fee;
 
     // 5. Update Database Atomically
@@ -41,9 +48,9 @@ module.exports = {
       await logChannel.send({
         content:
           `🚨 **NEW WITHDRAWAL REQUEST**\n` +
-          `👤 **User:** <@${interaction.user.id}>\n` +
+          `👤 **User:** <@${interaction.user.id}> (\`${interaction.user.id}\`)\n` +
           `💰 **Total:** ${amount.toLocaleString()}\n` +
-          `📉 **Fee (5%):** -${fee.toLocaleString()}\n` +
+          `📉 **Fee (3%):** -${fee.toLocaleString()}\n` +
           `🎁 **Payout:** **${finalAmount.toLocaleString()}**\n` +
           `🎮 **Destination Account:** \`${target}\``,
       });
@@ -51,7 +58,8 @@ module.exports = {
 
     // 7. Success Message
     await interaction.editReply(
-      `✅ **Request Sent!** Deducted **${amount.toLocaleString()}** gold from your vault. You will receive **${finalAmount.toLocaleString()}** gold at \`${target}\` shortly.`,
+      `✅ **Request Sent!** Deducted **${amount.toLocaleString()}** gold from your vault.\n` +
+        `You will receive **${finalAmount.toLocaleString()}** gold at \`${target}\` shortly (after the 3% service fee).`,
     );
   },
 };

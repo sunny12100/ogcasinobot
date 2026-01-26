@@ -49,18 +49,19 @@ module.exports = {
         "# 📤 How to Withdraw\n" +
           "Click the **Withdraw** button below to start your payout request.\n\n" +
           "**1.** Enter the amount you wish to cash out.\n" +
-          "**2.** Confirm the destination account (defaults to your linked Territorial Accound ID).\n" +
-          "**3.** An admin will verify the request and send the gold in-game.\n\n" +
-          "### 🧾 Transaction Details\n" +
-          "> **Service Fee:** 3% is deducted from the total to cover transaction costs.\n" +
-          "> **Example:** If you withdraw 1,000 gold, you will receive 970 gold.\n\n" +
+          "**2.** Confirm the destination account.\n" +
+          "**3.** An admin will verify and send the gold in-game.\n\n" +
+          "### 🧾 Transaction Rules\n" +
+          "> **Minimum Withdrawal:** `50` gold\n" +
+          "> **Service Fee:** 3% is deducted from the total.\n" +
+          "> **Example:** Withdraw 1,000 gold → Receive 970 gold.\n\n" +
           "# ⚠️ Important Note\n" +
-          "Withdrawals are processed manually by staff. Please allow up to 24 hours for the gold to arrive. \n\n" +
+          "Withdrawals are processed manually. Please allow up to **24 hours** for delivery.\n\n" +
           "**If you have not received your gold after 24 hours, please ping a <@&930302959668056135> for assistance.**",
       )
       .setColor(0x3498db)
       .setFooter({
-        text: "Please ensure your game account is not wrong before withdrawing.The Casino will not be responsible in that scenario.",
+        text: "Ensure your game account ID is correct. The Casino is not responsible for transfers to incorrect IDs.",
       });
 
     const withdrawRow = new ActionRowBuilder().addComponents(
@@ -70,7 +71,7 @@ module.exports = {
         .setStyle(ButtonStyle.Primary),
     );
 
-    // Send them as separate messages
+    // Send as separate messages
     await interaction.channel.send({
       embeds: [regEmbed],
       components: [regRow],
@@ -81,7 +82,8 @@ module.exports = {
     });
 
     await interaction.reply({
-      content: "✅ Panels created as separate messages!",
+      content:
+        "✅ Registration and Withdrawal panels (50 gold min) have been created!",
       ephemeral: true,
     });
   },
