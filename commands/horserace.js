@@ -99,7 +99,7 @@ module.exports = {
           const winner =
             finishers[Math.floor(Math.random() * finishers.length)];
           const won = winner.name === chosenHorse;
-          const winnings = amount * 2;
+          const winnings = amount * 3;
 
           let finalUser;
           if (won) {
