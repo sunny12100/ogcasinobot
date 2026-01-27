@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require("discord.js");
-const User = require("../models/User"); // Import your Mongoose model
+const User = require("../models/User"); // Player model
+const AuditLog = require("../models/AuditLog"); // New AuditLog model
 const { logToAudit } = require("../utils/logger");
 
 module.exports = {
@@ -20,14 +21,27 @@ module.exports = {
     }
 
     // 2. UPDATE GOLD AND SAVE
+    const oldBalance = userData.gold;
     userData.gold += amount;
     await userData.save();
 
-    // 3. LOG TO AUDIT (Passing adminId for tracking)
+    // 3. TRACK MODERATOR ACTION (For mod-stats command)
+    await AuditLog.create({
+      modId: interaction.user.id,
+      modTag: interaction.user.tag,
+      targetId: target.id,
+      action: "ADD",
+      amount: amount,
+      timestamp: new Date(),
+    }).catch((err) => console.error("❌ AuditLog Save Error:", err));
+
+    // 4. LOG TO AUDIT CHANNEL (Live feed)
     await logToAudit(interaction.client, {
       userId: target.id,
       adminId: interaction.user.id,
       amount: amount,
+      oldBalance: oldBalance,
+      newBalance: userData.gold,
       reason: "Admin add-gold command",
     });
 

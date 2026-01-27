@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require("discord.js");
-const User = require("../models/User"); // Import Mongoose model
+const User = require("../models/User");
+const AuditLog = require("../models/AuditLog"); // Added AuditLog
 const { logToAudit } = require("../utils/logger");
 
 module.exports = {
@@ -8,30 +9,41 @@ module.exports = {
     const target = interaction.options.getUser("user");
     const amount = interaction.options.getInteger("amount");
 
-    // 1. FETCH TARGET USER FROM MONGODB
+    // 1. FETCH TARGET USER
     const userData = await User.findOne({ userId: target.id });
 
-    // ERROR THROW: Check if user exists in the cloud DB
     if (!userData) {
       return interaction.reply({
-        content: `❌ **Error:** Cannot remove gold. <@${target.id}> does not have a registered casino account.`,
+        content: `❌ **Error:** <@${target.id}> does not have a registered account.`,
         ephemeral: true,
       });
     }
 
-    // 2. CALCULATE REMOVAL (Preventing negative balance)
+    // 2. CALCULATE REMOVAL
     const oldBalance = userData.gold;
     userData.gold = Math.max(0, userData.gold - amount);
     const actualRemoved = oldBalance - userData.gold;
 
-    // 3. SAVE UPDATED BALANCE TO ATLAS
+    // 3. SAVE TO DB
     await userData.save();
 
-    // 4. LOG TO AUDIT
+    // 4. TRACK MODERATOR ACTION (For mod-stats)
+    await AuditLog.create({
+      modId: interaction.user.id,
+      modTag: interaction.user.tag,
+      targetId: target.id,
+      action: "REMOVE",
+      amount: actualRemoved, // Tracking the positive volume removed
+      timestamp: new Date(),
+    }).catch((err) => console.error("❌ AuditLog Save Error (Remove):", err));
+
+    // 5. LOG TO AUDIT CHANNEL
     await logToAudit(interaction.client, {
       userId: target.id,
       adminId: interaction.user.id,
       amount: -actualRemoved,
+      oldBalance: oldBalance,
+      newBalance: userData.gold,
       reason: "Admin remove-gold command",
     });
 

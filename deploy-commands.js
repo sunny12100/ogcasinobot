@@ -233,6 +233,10 @@ const commands = [
           { name: "IND (Yellow)", value: "IND" },
         ),
     ),
+  new SlashCommandBuilder()
+    .setName("mod-stats") // <--- NEW COMMAND ADDED HERE
+    .setDescription("Admin: View moderator workload and activity logs")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
