@@ -45,48 +45,40 @@ module.exports = {
     const initialBalance = userData.gold;
     await User.updateOne({ userId }, { $inc: { gold: -amount } });
 
-    // --- GAME STATE ---
     let revealed = 0;
     let isGameOver = false;
     const revealedIndices = [];
     const bombIndices = [];
 
-    // Determine Cap based on your brackets
+    // --- BRACKET LOGIC ---
     let maxMultiplier = 2.0;
     if (mineCount > 10 && mineCount <= 15) maxMultiplier = 3.0;
     if (mineCount > 15) maxMultiplier = 4.0;
 
-    // Calculate step: Each gem increases multiplier towards the cap
-    // We'll give the full cap at 5 successful gems for a fast-paced feel
+    // --- DYNAMIC MULTIPLIER (No Stagnation) ---
+    // Total playable tiles in this version is 20 (4 rows of 5)
+    const totalTiles = 20;
     const getMultiplier = (rev) => {
       if (rev === 0) return 1.0;
-      const step = (maxMultiplier - 1) / 5;
-      const current = 1 + step * rev;
-      return Math.min(current, maxMultiplier);
+
+      // Using a power curve so it grows faster at the start but
+      // keeps moving toward the max without stopping abruptly.
+      // Formula: 1 + (Max - 1) * (current / total)^0.7
+      const progress = rev / totalTiles;
+      const currentMult = 1 + (maxMultiplier - 1) * Math.pow(progress, 0.7);
+
+      return Math.min(currentMult, maxMultiplier);
     };
 
     const createGrid = (showLoss = false) => {
       const rows = [];
-      for (let i = 0; i < 5; i++) {
+      // 4 Rows of Gems (20 Tiles)
+      for (let i = 0; i < 4; i++) {
         const row = new ActionRowBuilder();
         for (let j = 0; j < 5; j++) {
           const idx = i * 5 + j;
-
-          // Cashout Button at bottom right
-          if (idx === 24 && !isGameOver) {
-            const mult = getMultiplier(revealed);
-            const cashoutVal = Math.floor(amount * mult);
-            row.addComponents(
-              new ButtonBuilder()
-                .setCustomId("mine_cashout")
-                .setLabel(revealed > 0 ? `Cashout (${cashoutVal})` : "Cashout")
-                .setStyle(ButtonStyle.Success)
-                .setDisabled(revealed === 0),
-            );
-            continue;
-          }
-
           const btn = new ButtonBuilder().setCustomId(`mine_${idx}`);
+
           if (revealedIndices.includes(idx)) {
             btn.setEmoji("💎").setStyle(ButtonStyle.Primary).setDisabled(true);
           } else if (showLoss && bombIndices.includes(idx)) {
@@ -101,11 +93,26 @@ module.exports = {
         }
         rows.push(row);
       }
+
+      // 5th Row for Cashout
+      const controlRow = new ActionRowBuilder();
+      const mult = getMultiplier(revealed);
+      const cashoutVal = Math.floor(amount * mult);
+
+      controlRow.addComponents(
+        new ButtonBuilder()
+          .setCustomId("mine_cashout")
+          .setLabel(revealed > 0 ? `Cashout (${cashoutVal})` : "Cashout")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(revealed === 0 || isGameOver),
+      );
+      rows.push(controlRow);
+
       return rows;
     };
 
     const baseEmbed = new EmbedBuilder()
-      .setTitle("💣 OG MINES: FIXED ODDS")
+      .setTitle("💣 OG MINES")
       .setColor(0xffaa00)
       .setDescription(
         `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n📈 **Bracket Max:** \`${maxMultiplier}x\``,
@@ -130,7 +137,6 @@ module.exports = {
         isGameOver = true;
         const finalMult = getMultiplier(revealed);
         const winAmount = Math.floor(amount * finalMult);
-
         const winner = await User.findOneAndUpdate(
           { userId },
           { $inc: { gold: winAmount } },
@@ -143,11 +149,20 @@ module.exports = {
               .setTitle("💰 WINNER")
               .setColor(0x2ecc71)
               .setDescription(
-                `### You cashed out **${winAmount}** gold!\nMultiplier: \`${finalMult.toFixed(2)}x\``,
+                `### Won **${winAmount}** gold!\nFinal Multiplier: \`${finalMult.toFixed(2)}x\``,
               ),
           ],
           components: createGrid(true),
         });
+
+        logToAudit(interaction.client, {
+          userId,
+          bet: amount,
+          amount: winAmount - amount,
+          oldBalance: initialBalance,
+          newBalance: winner.gold,
+          reason: `Mines Win (${revealed} gems)`,
+        }).catch(() => null);
 
         collector.stop();
         return;
@@ -155,14 +170,11 @@ module.exports = {
 
       const idx = parseInt(i.customId.split("_")[1]);
 
-      // FIXED PROBABILITY LOGIC (45% chance to be a Gem)
-      const roll = Math.random();
-      const winChance = 0.45;
-
-      if (roll > winChance) {
-        // HIT A MINE
+      // 45% Win Probability
+      if (Math.random() > 0.45) {
         isGameOver = true;
         bombIndices.push(idx);
+        const lostUser = await User.findOne({ userId });
         await safeUpdate(i, {
           embeds: [
             EmbedBuilder.from(baseEmbed)
@@ -172,17 +184,24 @@ module.exports = {
           ],
           components: createGrid(true),
         });
+
+        logToAudit(interaction.client, {
+          userId,
+          bet: amount,
+          amount: -amount,
+          oldBalance: initialBalance,
+          newBalance: lostUser.gold,
+          reason: "Mines Loss",
+        }).catch(() => null);
+
         collector.stop();
       } else {
-        // HIT A GEM
         revealed++;
         revealedIndices.push(idx);
-        const currentMult = getMultiplier(revealed);
-
         await safeUpdate(i, {
           embeds: [
             EmbedBuilder.from(baseEmbed).setDescription(
-              `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n✨ **Next Multiplier:** \`${currentMult.toFixed(2)}x\``,
+              `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n✨ **Multiplier:** \`${getMultiplier(revealed).toFixed(2)}x\``,
             ),
           ],
           components: createGrid(),

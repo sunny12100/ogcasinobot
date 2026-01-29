@@ -204,10 +204,10 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("mines")
-        .setDescription("Number of mines to hide (1-20)")
+        .setDescription("Number of mines to hide (1-19)")
         .setRequired(false)
         .setMinValue(1)
-        .setMaxValue(20),
+        .setMaxValue(19),
     ),
 
   new SlashCommandBuilder()
