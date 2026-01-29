@@ -52,7 +52,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --- COOLDOWN LOGIC START ---
     const userId = interaction.user.id;
     const now = Date.now();
-    const cooldownAmount = 3000; // 3 seconds in milliseconds
+    const cooldownAmount = 5000; // 3 seconds in milliseconds
 
     if (cooldowns.has(userId)) {
       const expirationTime = cooldowns.get(userId) + cooldownAmount;
