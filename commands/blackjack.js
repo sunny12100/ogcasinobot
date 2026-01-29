@@ -65,31 +65,34 @@ module.exports = {
       for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
     }
 
-    // Fisher–Yates shuffle
     for (let i = deck.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
     }
 
-    // ===== Hand value =====
+    // ===== Hand value (FIXED) =====
     const getVal = (hand) => {
-      let val = 0,
-        aces = 0;
+      let total = 0;
+      let aces = 0;
+
       for (const card of hand) {
         const v = card.replace(/[`♠️❤️♣️♦️]/g, "");
         if (v === "A") aces++;
-        else if (["J", "Q", "K"].includes(v)) val += 10;
-        else val += parseInt(v);
+        else if (["J", "Q", "K"].includes(v)) total += 10;
+        else total += parseInt(v);
       }
+
       for (let i = 0; i < aces; i++) {
-        val += val + 11 <= 21 ? 11 : 1;
+        total += total + 11 <= 21 ? 11 : 1;
       }
-      return val;
+
+      return total;
     };
 
     let playerHand = [deck.pop(), deck.pop()];
     let dealerHand = [deck.pop(), deck.pop()];
     let baseBet = currentBet;
+    let canDouble = true;
 
     const createEmbed = (
       title,
@@ -121,27 +124,12 @@ module.exports = {
         )
         .setFooter({ text: `💰 Bet: ${currentBet}` });
 
-    // ===== Finish Game =====
     const finishGame = async () => {
       clearTimeout(failSafe);
       activeBlackjack.delete(userId);
 
-      // Dealer logic with subtle bias (feels natural)
-      while (true) {
-        const dVal = getVal(dealerHand);
-        if (dVal < 16) {
-          dealerHand.push(deck.pop());
-          continue;
-        }
-        if (dVal === 16 && Math.random() < 0.65) {
-          dealerHand.push(deck.pop());
-          continue;
-        }
-        if (dVal === 17 && Math.random() < 0.25) {
-          dealerHand.push(deck.pop());
-          continue;
-        }
-        break;
+      while (getVal(dealerHand) < 17) {
+        dealerHand.push(deck.pop());
       }
 
       const p = getVal(playerHand);
@@ -153,18 +141,14 @@ module.exports = {
 
       if (p > 21) {
         statusText = "💥 **BUST!**";
-      } else if (d > 21) {
+      } else if (d > 21 || p > d) {
         payout = currentBet * 2;
-        statusText = "✅ **DEALER BUSTS!**";
+        statusText = "✅ **YOU WIN!**";
         winType = "win";
       } else if (p === d) {
         payout = currentBet;
         statusText = "🤝 **PUSH**";
         winType = "push";
-      } else if (p > d) {
-        payout = currentBet * 2;
-        statusText = "✅ **YOU WIN!**";
-        winType = "win";
       } else {
         statusText = "❌ **YOU LOSE**";
       }
@@ -198,21 +182,33 @@ module.exports = {
       }).catch(() => null);
     };
 
-    // ===== UI =====
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("hit")
-        .setLabel("Hit")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("stand")
-        .setLabel("Stand")
-        .setStyle(ButtonStyle.Secondary),
-    );
+    const buildButtons = () => {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("hit")
+          .setLabel("Hit")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("stand")
+          .setLabel("Stand")
+          .setStyle(ButtonStyle.Secondary),
+      );
+
+      if (canDouble && playerHand.length === 2 && userData.gold >= baseBet) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId("double")
+            .setLabel("Double Down")
+            .setStyle(ButtonStyle.Danger),
+        );
+      }
+
+      return row;
+    };
 
     const msg = await interaction.editReply({
       embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
-      components: [row],
+      components: [buildButtons()],
     });
 
     const collector = msg.createMessageComponentCollector({
@@ -226,8 +222,25 @@ module.exports = {
 
       if (i.customId === "hit") {
         playerHand.push(deck.pop());
-        if (getVal(playerHand) > 21) return collector.stop();
-        return i.update({ embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)] });
+        canDouble = false;
+
+        if (getVal(playerHand) > 21) {
+          await i.deferUpdate();
+          return collector.stop();
+        }
+
+        return i.update({
+          embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
+          components: [buildButtons()],
+        });
+      }
+
+      if (i.customId === "double") {
+        await User.updateOne({ userId }, { $inc: { gold: -baseBet } });
+        currentBet *= 2;
+        playerHand.push(deck.pop());
+        await i.deferUpdate();
+        return collector.stop();
       }
 
       await i.deferUpdate();
