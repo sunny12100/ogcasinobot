@@ -20,6 +20,9 @@ const User = require("./models/User");
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
+// --- COOLDOWN SYSTEM ---
+const cooldowns = new Map();
+
 // 2. CONNECT TO MONGODB ATLAS
 mongoose
   .connect(process.env.MONGODB_URI)
@@ -46,6 +49,28 @@ client.once(Events.ClientReady, () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   // 1. HANDLE SLASH COMMANDS
   if (interaction.isChatInputCommand()) {
+    // --- COOLDOWN LOGIC START ---
+    const userId = interaction.user.id;
+    const now = Date.now();
+    const cooldownAmount = 3000; // 3 seconds in milliseconds
+
+    if (cooldowns.has(userId)) {
+      const expirationTime = cooldowns.get(userId) + cooldownAmount;
+
+      if (now < expirationTime) {
+        const timeLeft = (expirationTime - now) / 1000;
+        return interaction.reply({
+          content: `⏱️ **Slow down!** You can use another command in **${timeLeft.toFixed(1)}s**.`,
+          ephemeral: true,
+        });
+      }
+    }
+
+    // Set timestamp and auto-delete after cooldown ends
+    cooldowns.set(userId, now);
+    setTimeout(() => cooldowns.delete(userId), cooldownAmount);
+    // --- COOLDOWN LOGIC END ---
+
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
     try {
