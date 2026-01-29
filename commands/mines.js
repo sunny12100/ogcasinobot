@@ -55,24 +55,16 @@ module.exports = {
     if (mineCount > 10 && mineCount <= 15) maxMultiplier = 3.0;
     if (mineCount > 15) maxMultiplier = 4.0;
 
-    // --- DYNAMIC MULTIPLIER (No Stagnation) ---
-    // Total playable tiles in this version is 20 (4 rows of 5)
     const totalTiles = 20;
     const getMultiplier = (rev) => {
       if (rev === 0) return 1.0;
-
-      // Using a power curve so it grows faster at the start but
-      // keeps moving toward the max without stopping abruptly.
-      // Formula: 1 + (Max - 1) * (current / total)^0.7
       const progress = rev / totalTiles;
       const currentMult = 1 + (maxMultiplier - 1) * Math.pow(progress, 0.7);
-
       return Math.min(currentMult, maxMultiplier);
     };
 
     const createGrid = (showLoss = false) => {
       const rows = [];
-      // 4 Rows of Gems (20 Tiles)
       for (let i = 0; i < 4; i++) {
         const row = new ActionRowBuilder();
         for (let j = 0; j < 5; j++) {
@@ -94,7 +86,6 @@ module.exports = {
         rows.push(row);
       }
 
-      // 5th Row for Cashout
       const controlRow = new ActionRowBuilder();
       const mult = getMultiplier(revealed);
       const cashoutVal = Math.floor(amount * mult);
@@ -107,7 +98,6 @@ module.exports = {
           .setDisabled(revealed === 0 || isGameOver),
       );
       rows.push(controlRow);
-
       return rows;
     };
 
@@ -126,7 +116,7 @@ module.exports = {
 
     const collector = msg.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 60000,
+      time: 60000, // 1 Minute Timeout
     });
 
     collector.on("collect", async (i) => {
@@ -164,13 +154,12 @@ module.exports = {
           reason: `Mines Win (${revealed} gems)`,
         }).catch(() => null);
 
-        collector.stop();
+        collector.stop("cashed_out");
         return;
       }
 
       const idx = parseInt(i.customId.split("_")[1]);
 
-      // 45% Win Probability
       if (Math.random() > 0.45) {
         isGameOver = true;
         bombIndices.push(idx);
@@ -194,7 +183,7 @@ module.exports = {
           reason: "Mines Loss",
         }).catch(() => null);
 
-        collector.stop();
+        collector.stop("hit_bomb");
       } else {
         revealed++;
         revealedIndices.push(idx);
@@ -209,6 +198,43 @@ module.exports = {
       }
     });
 
-    collector.on("end", () => activeMines.delete(userId));
+    collector.on("end", async (collected, reason) => {
+      activeMines.delete(userId);
+
+      // --- THE AFK FIX ---
+      if (reason === "time" && !isGameOver) {
+        isGameOver = true;
+
+        // Refund the user's bet
+        const updatedUser = await User.findOneAndUpdate(
+          { userId },
+          { $inc: { gold: amount } },
+          { new: true },
+        );
+
+        await interaction
+          .editReply({
+            embeds: [
+              EmbedBuilder.from(baseEmbed)
+                .setTitle("⏲️ AFK - TIMED OUT")
+                .setColor(0x95a5a6)
+                .setDescription(
+                  `### Inactive for 60s\nYour bet of **${amount} gold** has been returned.`,
+                ),
+            ],
+            components: createGrid(true),
+          })
+          .catch(() => null);
+
+        logToAudit(interaction.client, {
+          userId,
+          bet: amount,
+          amount: 0,
+          oldBalance: initialBalance,
+          newBalance: updatedUser.gold,
+          reason: "Mines AFK (Refunded)",
+        }).catch(() => null);
+      }
+    });
   },
 };
