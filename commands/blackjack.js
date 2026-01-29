@@ -9,7 +9,6 @@ const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
 const activeBlackjack = new Set();
-const WIN_RATE = 0.42; // 🎯 Target win probability
 
 module.exports = {
   name: "blackjack",
@@ -42,7 +41,7 @@ module.exports = {
     activeBlackjack.add(userId);
     const failSafe = setTimeout(() => activeBlackjack.delete(userId), 60000);
 
-    // ===== DECK (6-deck shoe) =====
+    // ===== Deck (6-deck shoe) =====
     const suits = ["♠️", "❤️", "♣️", "♦️"];
     const values = [
       "2",
@@ -66,13 +65,13 @@ module.exports = {
       for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
     }
 
-    // ✅ Proper shuffle (Fisher–Yates)
+    // Fisher–Yates shuffle
     for (let i = deck.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
     }
 
-    // ===== HAND VALUE (FIXED ACES) =====
+    // ===== Hand value =====
     const getVal = (hand) => {
       let val = 0,
         aces = 0;
@@ -92,7 +91,6 @@ module.exports = {
     let dealerHand = [deck.pop(), deck.pop()];
     let baseBet = currentBet;
 
-    // ===== EMBED =====
     const createEmbed = (
       title,
       color,
@@ -123,34 +121,50 @@ module.exports = {
         )
         .setFooter({ text: `💰 Bet: ${currentBet}` });
 
-    // ===== FINISH GAME =====
+    // ===== Finish Game =====
     const finishGame = async () => {
       clearTimeout(failSafe);
       activeBlackjack.delete(userId);
 
-      // Dealer hits on soft 17
-      while (getVal(dealerHand) < 17) dealerHand.push(deck.pop());
+      // Dealer logic with subtle bias (feels natural)
+      while (true) {
+        const dVal = getVal(dealerHand);
+        if (dVal < 16) {
+          dealerHand.push(deck.pop());
+          continue;
+        }
+        if (dVal === 16 && Math.random() < 0.65) {
+          dealerHand.push(deck.pop());
+          continue;
+        }
+        if (dVal === 17 && Math.random() < 0.25) {
+          dealerHand.push(deck.pop());
+          continue;
+        }
+        break;
+      }
 
-      let p = getVal(playerHand);
-      let d = getVal(dealerHand);
+      const p = getVal(playerHand);
+      const d = getVal(dealerHand);
 
       let payout = 0;
       let statusText = "";
       let winType = "loss";
 
-      if (p <= 21 && (d > 21 || p > d)) {
-        // 🎯 Probability control
-        if (Math.random() <= WIN_RATE) {
-          payout = currentBet * 2;
-          statusText = "✅ **YOU WIN!**";
-          winType = "win";
-        } else {
-          statusText = "❌ **YOU LOSE**";
-        }
-      } else if (p === d && p <= 21) {
+      if (p > 21) {
+        statusText = "💥 **BUST!**";
+      } else if (d > 21) {
+        payout = currentBet * 2;
+        statusText = "✅ **DEALER BUSTS!**";
+        winType = "win";
+      } else if (p === d) {
         payout = currentBet;
         statusText = "🤝 **PUSH**";
         winType = "push";
+      } else if (p > d) {
+        payout = currentBet * 2;
+        statusText = "✅ **YOU WIN!**";
+        winType = "win";
       } else {
         statusText = "❌ **YOU LOSE**";
       }
@@ -174,7 +188,6 @@ module.exports = {
 
       await interaction.editReply({ embeds: [endEmbed], components: [] });
 
-      // 🔒 LOGS UNCHANGED
       logToAudit(interaction.client, {
         userId,
         bet: baseBet,
@@ -185,7 +198,7 @@ module.exports = {
       }).catch(() => null);
     };
 
-    // ===== GAME UI =====
+    // ===== UI =====
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId("hit")
