@@ -35,14 +35,16 @@ module.exports = {
       });
     }
 
-    // 🔒 DEDUCT BET IMMEDIATELY
+    // 🔒 Deduct bet immediately
     await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
     const initialBalance = userData.gold;
 
     activeBlackjack.add(userId);
     const failSafe = setTimeout(() => activeBlackjack.delete(userId), 60000);
 
-    // Deck
+    // =========================
+    // 🂠 Deck (6-deck shoe)
+    // =========================
     const suits = ["♠️", "❤️", "♣️", "♦️"];
     const values = [
       "2",
@@ -59,8 +61,13 @@ module.exports = {
       "K",
       "A",
     ];
+    const DECKS = 6;
+
     let deck = [];
-    for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
+    for (let i = 0; i < DECKS; i++) {
+      for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
+    }
+
     deck.sort(() => Math.random() - 0.5);
 
     const getVal = (hand) => {
@@ -81,6 +88,9 @@ module.exports = {
     let baseBet = currentBet;
     let doubled = false;
 
+    // =========================
+    // 🖼️ Embed Builder
+    // =========================
     const createEmbed = (
       title,
       color,
@@ -104,9 +114,17 @@ module.exports = {
               : `**${dealerHand[0]}** \`??\``,
             inline: true,
           },
+          {
+            name: "🂠 Cards remaining",
+            value: `\`${deck.length}\``,
+            inline: false,
+          },
         )
         .setFooter({ text: `💰 Bet: ${currentBet}` });
 
+    // =========================
+    // 🏁 Finish Game
+    // =========================
     const finishGame = async (reason) => {
       clearTimeout(failSafe);
       activeBlackjack.delete(userId);
@@ -188,6 +206,7 @@ module.exports = {
         repeatCollector.stop();
       });
 
+      // 🔒 LOGS (UNCHANGED)
       logToAudit(interaction.client, {
         userId,
         bet: baseBet,
@@ -198,7 +217,7 @@ module.exports = {
       }).catch(() => null);
     };
 
-    // 🟢 NATURAL CHECK
+    // 🟢 Natural Blackjack
     if (getVal(playerHand) === 21) {
       await interaction.editReply({
         embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2, true, "Blackjack!")],
