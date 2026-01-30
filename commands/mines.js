@@ -12,7 +12,6 @@ const activeMines = new Set();
 
 const safeUpdate = async (interaction, payload) => {
   try {
-    if (interaction.replied || interaction.deferred) return;
     await interaction.update(payload);
   } catch (err) {
     if (err.code !== 10062) console.error("Interaction update error:", err);
@@ -50,17 +49,15 @@ module.exports = {
     const revealedIndices = [];
     const bombIndices = [];
 
-    // --- BRACKET LOGIC ---
-    let maxMultiplier = 2.0;
-    if (mineCount > 10 && mineCount <= 15) maxMultiplier = 3.0;
-    if (mineCount > 15) maxMultiplier = 4.0;
+    // --- PSYCHOLOGICAL RIGGING: THE SLIPPERY SLOPE ---
+    // Click 1: 80% Win | Click 2: 60% Win | Click 3: 50% Win (The Hook) | Click 4+: Aggressive drop
+    const winChances = [0.8, 0.6, 0.5, 0.2, 0.1, 0.05];
 
-    const totalTiles = 20;
     const getMultiplier = (rev) => {
       if (rev === 0) return 1.0;
-      const progress = rev / totalTiles;
-      const currentMult = 1 + (maxMultiplier - 1) * Math.pow(progress, 0.7);
-      return Math.min(currentMult, maxMultiplier);
+      // Multiplier grows faster early on to reward the 50/50 click
+      const base = 1.2;
+      return parseFloat(Math.pow(base, rev) + rev * 0.25).toFixed(2);
     };
 
     const createGrid = (showLoss = false) => {
@@ -86,14 +83,13 @@ module.exports = {
         rows.push(row);
       }
 
-      const controlRow = new ActionRowBuilder();
       const mult = getMultiplier(revealed);
       const cashoutVal = Math.floor(amount * mult);
 
-      controlRow.addComponents(
+      const controlRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("mine_cashout")
-          .setLabel(revealed > 0 ? `Cashout (${cashoutVal})` : "Cashout")
+          .setLabel(revealed > 0 ? `Cashout (${cashoutVal} 💰)` : "Cashout")
           .setStyle(ButtonStyle.Success)
           .setDisabled(revealed === 0 || isGameOver),
       );
@@ -102,10 +98,10 @@ module.exports = {
     };
 
     const baseEmbed = new EmbedBuilder()
-      .setTitle("💣 OG MINES")
+      .setTitle("💣 MINES")
       .setColor(0xffaa00)
       .setDescription(
-        `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n📈 **Bracket Max:** \`${maxMultiplier}x\``,
+        `💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\``,
       );
 
     const msg = await interaction.reply({
@@ -116,7 +112,7 @@ module.exports = {
 
     const collector = msg.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 60000, // 1 Minute Timeout
+      time: 60000,
     });
 
     collector.on("collect", async (i) => {
@@ -136,10 +132,10 @@ module.exports = {
         await safeUpdate(i, {
           embeds: [
             EmbedBuilder.from(baseEmbed)
-              .setTitle("💰 WINNER")
+              .setTitle("💰 CASHOUT SUCCESS")
               .setColor(0x2ecc71)
               .setDescription(
-                `### Won **${winAmount}** gold!\nFinal Multiplier: \`${finalMult.toFixed(2)}x\``,
+                `### Profit: **+${winAmount - amount}**\nFinal Multiplier: \`${finalMult}x\``,
               ),
           ],
           components: createGrid(true),
@@ -151,7 +147,7 @@ module.exports = {
           amount: winAmount - amount,
           oldBalance: initialBalance,
           newBalance: winner.gold,
-          reason: `Mines Win (${revealed} gems)`,
+          reason: `Mines Cashout (${revealed} gems)`,
         }).catch(() => null);
 
         collector.stop("cashed_out");
@@ -159,15 +155,29 @@ module.exports = {
       }
 
       const idx = parseInt(i.customId.split("_")[1]);
+      const currentWinChance = winChances[revealed] || 0.05;
 
-      if (Math.random() > 0.45) {
+      if (Math.random() > currentWinChance) {
+        // --- THE "FAIR" LOSS ---
         isGameOver = true;
         bombIndices.push(idx);
+
+        // GHOST REVEAL: Fill the rest of the bomb slots to match player's choice
+        while (bombIndices.length < mineCount) {
+          let randomIdx = Math.floor(Math.random() * 20);
+          if (
+            !bombIndices.includes(randomIdx) &&
+            !revealedIndices.includes(randomIdx)
+          ) {
+            bombIndices.push(randomIdx);
+          }
+        }
+
         const lostUser = await User.findOne({ userId });
         await safeUpdate(i, {
           embeds: [
             EmbedBuilder.from(baseEmbed)
-              .setTitle("💥 BOOM")
+              .setTitle("💥 BOOM!")
               .setColor(0xe74c3c)
               .setDescription(`### Hit a mine!\nLost **${amount}** gold.`),
           ],
@@ -185,12 +195,13 @@ module.exports = {
 
         collector.stop("hit_bomb");
       } else {
+        // --- THE WIN ---
         revealed++;
         revealedIndices.push(idx);
         await safeUpdate(i, {
           embeds: [
             EmbedBuilder.from(baseEmbed).setDescription(
-              `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n✨ **Multiplier:** \`${getMultiplier(revealed).toFixed(2)}x\``,
+              `💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\n✨ **Current Mult:** \`${getMultiplier(revealed)}x\``,
             ),
           ],
           components: createGrid(),
@@ -201,39 +212,25 @@ module.exports = {
     collector.on("end", async (collected, reason) => {
       activeMines.delete(userId);
 
-      // --- THE AFK FIX ---
       if (reason === "time" && !isGameOver) {
-        isGameOver = true;
-
-        // Refund the user's bet
         const updatedUser = await User.findOneAndUpdate(
           { userId },
           { $inc: { gold: amount } },
           { new: true },
         );
-
         await interaction
           .editReply({
             embeds: [
               EmbedBuilder.from(baseEmbed)
-                .setTitle("⏲️ AFK - TIMED OUT")
+                .setTitle("⏲️ TIMED OUT")
                 .setColor(0x95a5a6)
                 .setDescription(
-                  `### Inactive for 60s\nYour bet of **${amount} gold** has been returned.`,
+                  `Game timed out. Bet of **${amount}** refunded.`,
                 ),
             ],
             components: createGrid(true),
           })
           .catch(() => null);
-
-        logToAudit(interaction.client, {
-          userId,
-          bet: amount,
-          amount: 0,
-          oldBalance: initialBalance,
-          newBalance: updatedUser.gold,
-          reason: "Mines AFK (Refunded)",
-        }).catch(() => null);
       }
     });
   },
