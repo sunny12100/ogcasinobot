@@ -22,6 +22,7 @@ module.exports = {
         content: `❌ Max bet is ${MAX_BET}!`,
         ephemeral: true,
       });
+
     if (activeBlackjack.has(userId))
       return interaction.reply({
         content: "❌ Game already in progress!",
@@ -35,11 +36,14 @@ module.exports = {
     }
 
     activeBlackjack.add(userId);
+    const initialBalance = userData.gold;
     await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
+
     let currentPot = currentBet;
+    let isProcessing = false;
     let endedByPlayer = false;
 
-    // --- DECK GENERATION ---
+    // --- DECK GENERATION (6 Decks) ---
     const suits = ["♠️", "❤️", "♣️", "♦️"];
     const values = [
       "2",
@@ -75,21 +79,17 @@ module.exports = {
       return total;
     };
 
-    // --- THE RIGGING ENGINE ---
-    // 40% target win rate means 60% of the time, the deck will "stack" against them.
+    // --- STEALTH RIGGING ---
     const shouldPlayerLose = Math.random() > 0.4;
 
     const riggedPop = (targetLoss = false, currentHandValue = 0) => {
       if (!targetLoss) return deck.pop();
-
-      // If we want the player to lose, find a card that puts them over 21
-      // or find a card that is low value (underwhelming).
+      // Search for a bust card (10+)
       const cardIdx = deck.findIndex((card) => {
         const val = getVal([card]);
-        return currentHandValue + val > 21; // Find a bust card
+        return currentHandValue + val > 21;
       });
-
-      if (cardIdx !== -1 && Math.random() > 0.5) {
+      if (cardIdx !== -1 && Math.random() > 0.4) {
         return deck.splice(cardIdx, 1)[0];
       }
       return deck.pop();
@@ -98,7 +98,6 @@ module.exports = {
     let playerHand = [deck.pop(), deck.pop()];
     let dealerHand = [deck.pop(), deck.pop()];
 
-    // Embed and Button helpers (keeping your existing style)
     const createEmbed = (
       title,
       color,
@@ -122,8 +121,15 @@ module.exports = {
               : `**${dealerHand[0]}** \`??\``,
             inline: true,
           },
+          {
+            name: "🂠 Cards remaining",
+            value: `\`${deck.length}\``,
+            inline: false,
+          },
         )
-        .setFooter({ text: `💰 Bet: ${currentPot}` });
+        .setFooter({
+          text: `💰 Bet: ${currentPot} | Session ID: ${Math.floor(Math.random() * 99999)}`,
+        });
 
     const buildButtons = async () => {
       const row = new ActionRowBuilder().addComponents(
@@ -135,13 +141,39 @@ module.exports = {
           .setCustomId("stand")
           .setLabel("Stand")
           .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId("double")
-          .setLabel("Double")
-          .setStyle(ButtonStyle.Danger),
       );
+
+      const freshUser = await User.findOne({ userId });
+      if (playerHand.length === 2 && freshUser.gold >= currentBet) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId("double")
+            .setLabel("Double Down")
+            .setStyle(ButtonStyle.Danger),
+        );
+      }
       return row;
     };
+
+    // Initial Blackjack Check
+    if (getVal(playerHand) === 21) {
+      activeBlackjack.delete(userId);
+      endedByPlayer = true;
+      const dVal = getVal(dealerHand);
+      const payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
+      await User.updateOne({ userId }, { $inc: { gold: payout } });
+      return interaction.editReply({
+        embeds: [
+          createEmbed(
+            "🎉 WINNER",
+            0x2ecc71,
+            true,
+            dVal === 21 ? "🤝 **PUSH (Both 21)**" : "🂡 **BLACKJACK!**",
+          ),
+        ],
+        components: [],
+      });
+    }
 
     const msg = await interaction.editReply({
       embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
@@ -156,11 +188,11 @@ module.exports = {
     collector.on("collect", async (i) => {
       if (i.user.id !== userId)
         return i.reply({ content: "Not your game!", ephemeral: true });
+      if (isProcessing) return;
+      isProcessing = true;
 
       if (i.customId === "hit") {
-        // Use riggedPop to potentially force a bust if the 60% 'loss' roll happened
         playerHand.push(riggedPop(shouldPlayerLose, getVal(playerHand)));
-
         if (getVal(playerHand) >= 21) {
           endedByPlayer = true;
           collector.stop("ended");
@@ -170,12 +202,17 @@ module.exports = {
             embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
             components: [await buildButtons()],
           });
+          isProcessing = false;
         }
       } else if (i.customId === "double") {
         const freshUser = await User.findOne({ userId });
-        if (freshUser.gold < currentBet)
-          return i.reply({ content: "Not enough gold!", ephemeral: true });
-
+        if (freshUser.gold < currentBet) {
+          isProcessing = false;
+          return i.reply({
+            content: "❌ Not enough gold to double!",
+            ephemeral: true,
+          });
+        }
         await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
         currentPot *= 2;
         playerHand.push(riggedPop(shouldPlayerLose, getVal(playerHand)));
@@ -191,21 +228,14 @@ module.exports = {
 
     collector.on("end", async () => {
       activeBlackjack.delete(userId);
-      if (!endedByPlayer) {
-        // AFK Auto-Stand (No refund)
-        endedByPlayer = true;
-      }
+      if (!endedByPlayer) endedByPlayer = true;
 
       let pVal = getVal(playerHand);
       let dVal = getVal(dealerHand);
 
-      // --- RIGGING THE DEALER ---
-      // If player didn't bust and we want them to lose, make dealer "lucky"
       if (pVal <= 21) {
         while (dVal < 17 || (shouldPlayerLose && dVal <= pVal && dVal < 21)) {
-          // Dealer draws until they beat the player or hit 21
-          let nextCard = deck.pop();
-          dealerHand.push(nextCard);
+          dealerHand.push(deck.pop());
           dVal = getVal(dealerHand);
         }
       }
@@ -219,16 +249,16 @@ module.exports = {
         statusText = "💥 **BUST!**";
       } else if (dVal > 21 || pVal > dVal) {
         payout = currentPot * 2;
-        statusText = "✅ **WIN**";
+        statusText = "✅ **YOU WIN!**";
         finalTitle = "🎉 WINNER";
         finalColor = 0x2ecc71;
       } else if (pVal === dVal) {
-        payout = currentPot; // TIE = PUSH
+        payout = currentPot;
         statusText = "🤝 **PUSH**";
         finalTitle = "🤝 TIED";
         finalColor = 0x95a5a6;
       } else {
-        statusText = "❌ **LOSE**";
+        statusText = "❌ **YOU LOSE**";
       }
 
       const finalUser = await User.findOneAndUpdate(
@@ -236,18 +266,20 @@ module.exports = {
         { $inc: { gold: payout } },
         { new: true },
       );
-      await interaction.editReply({
-        embeds: [createEmbed(finalTitle, finalColor, true, statusText)],
-        components: [],
-      });
+      await interaction
+        .editReply({
+          embeds: [createEmbed(finalTitle, finalColor, true, statusText)],
+          components: [],
+        })
+        .catch(() => null);
 
       logToAudit(interaction.client, {
         userId,
         bet: currentBet,
         amount: payout - currentPot,
-        oldBalance: userData.gold,
+        oldBalance: initialBalance,
         newBalance: finalUser.gold,
-        reason: `Blackjack: ${statusText}`,
+        reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
       }).catch(() => null);
     });
   },
