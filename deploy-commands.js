@@ -92,10 +92,10 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (25-500)")
+        .setDescription("Gold to bet (25-200)")
         .setRequired(true)
         .setMinValue(25) // Updated to 25
-        .setMaxValue(500),
+        .setMaxValue(200),
     ),
 
   new SlashCommandBuilder()
