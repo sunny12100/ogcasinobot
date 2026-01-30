@@ -33,14 +33,17 @@ module.exports = {
     }
 
     activeBlackjack.add(userId);
+
     let isProcessing = false;
     let isGameOver = false;
+    let endedByPlayer = false; // 🔑 FIX FLAG
 
     await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
 
     const initialBalance = userData.gold;
     let currentPot = currentBet;
 
+    /* ---------------- DECK ---------------- */
     const suits = ["♠️", "❤️", "♣️", "♦️"];
     const values = [
       "2",
@@ -58,9 +61,11 @@ module.exports = {
       "A",
     ];
     let deck = [];
+
     for (let i = 0; i < 6; i++) {
       for (const s of suits) for (const v of values) deck.push(`\`${v}${s}\``);
     }
+
     for (let i = deck.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
@@ -69,15 +74,18 @@ module.exports = {
     const getVal = (hand) => {
       let total = 0;
       let aces = 0;
+
       for (const card of hand) {
         const v = card.replace(/[`♠️❤️♣️♦️]/g, "");
         if (v === "A") aces++;
         else if (["J", "Q", "K"].includes(v)) total += 10;
         else total += parseInt(v);
       }
+
       for (let i = 0; i < aces; i++) {
         total += total + 11 <= 21 ? 11 : 1;
       }
+
       return total;
     };
 
@@ -135,17 +143,15 @@ module.exports = {
       return row;
     };
 
-    // Blackjack Check
+    /* ---------------- BLACKJACK CHECK ---------------- */
     if (getVal(playerHand) === 21) {
-      isGameOver = true;
       activeBlackjack.delete(userId);
+      endedByPlayer = true;
+
       const dVal = getVal(dealerHand);
-      let payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
-      const finalUser = await User.findOneAndUpdate(
-        { userId },
-        { $inc: { gold: payout } },
-        { new: true },
-      );
+      const payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
+
+      await User.updateOne({ userId }, { $inc: { gold: payout } });
 
       return interaction.editReply({
         embeds: [
@@ -173,15 +179,18 @@ module.exports = {
     collector.on("collect", async (i) => {
       if (i.user.id !== userId)
         return i.reply({ content: "Not your game!", ephemeral: true });
+
       if (isProcessing) return;
       isProcessing = true;
 
       if (i.customId === "hit") {
         playerHand.push(deck.pop());
+
         if (getVal(playerHand) >= 21) {
           isGameOver = true;
+          endedByPlayer = true;
           await i.deferUpdate();
-          collector.stop("game_ended");
+          collector.stop("ended");
         } else {
           await i.update({
             embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
@@ -198,24 +207,30 @@ module.exports = {
             ephemeral: true,
           });
         }
-        isGameOver = true;
+
         await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
         currentPot *= 2;
         playerHand.push(deck.pop());
+
+        isGameOver = true;
+        endedByPlayer = true;
         await i.deferUpdate();
-        collector.stop("game_ended");
+        collector.stop("ended");
       } else if (i.customId === "stand") {
         isGameOver = true;
+        endedByPlayer = true;
         await i.deferUpdate();
-        collector.stop("game_ended");
+        collector.stop("ended");
       }
     });
 
-    collector.on("end", async (collected, reason) => {
+    collector.on("end", async () => {
       activeBlackjack.delete(userId);
 
-      if (reason === "time" && !isGameOver) {
+      /* ---------------- AFK REFUND ---------------- */
+      if (!endedByPlayer) {
         await User.updateOne({ userId }, { $inc: { gold: currentPot } });
+
         return interaction
           .editReply({
             embeds: [
@@ -223,7 +238,7 @@ module.exports = {
                 "⏲️ AFK - TIMED OUT",
                 0x95a5a6,
                 true,
-                "Game timed out. Bet refunded.",
+                "You went AFK. Bet refunded.",
               ),
             ],
             components: [],
@@ -231,61 +246,59 @@ module.exports = {
           .catch(() => null);
       }
 
-      if (reason === "game_ended") {
-        let pVal = getVal(playerHand);
-        let dVal = getVal(dealerHand);
+      /* ---------------- GAME RESOLUTION ---------------- */
+      let pVal = getVal(playerHand);
+      let dVal = getVal(dealerHand);
 
-        // Dealer Logic
-        if (pVal <= 21) {
-          while (dVal < 17) {
-            dealerHand.push(deck.pop());
-            dVal = getVal(dealerHand);
-          }
+      if (pVal <= 21) {
+        while (dVal < 17) {
+          dealerHand.push(deck.pop());
+          dVal = getVal(dealerHand);
         }
-
-        let statusText = "";
-        let payout = 0;
-        let finalTitle = "💀 DEFEAT";
-        let finalColor = 0xe74c3c;
-
-        if (pVal > 21) {
-          statusText = "💥 **BUST!**";
-        } else if (dVal > 21 || pVal > dVal) {
-          payout = currentPot * 2;
-          statusText = "✅ **YOU WIN!**";
-          finalTitle = "🎉 WINNER";
-          finalColor = 0x2ecc71;
-        } else if (pVal === dVal) {
-          payout = currentPot;
-          statusText = "🤝 **PUSH**";
-          finalTitle = "🤝 TIED";
-          finalColor = 0x95a5a6;
-        } else {
-          statusText = "❌ **YOU LOSE**";
-        }
-
-        const finalUser = await User.findOneAndUpdate(
-          { userId },
-          { $inc: { gold: payout } },
-          { new: true },
-        );
-
-        await interaction
-          .editReply({
-            embeds: [createEmbed(finalTitle, finalColor, true, statusText)],
-            components: [],
-          })
-          .catch(() => null);
-
-        logToAudit(interaction.client, {
-          userId,
-          bet: currentBet,
-          amount: payout - currentPot,
-          oldBalance: initialBalance,
-          newBalance: finalUser.gold,
-          reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
-        }).catch(() => null);
       }
+
+      let statusText = "";
+      let payout = 0;
+      let finalTitle = "💀 DEFEAT";
+      let finalColor = 0xe74c3c;
+
+      if (pVal > 21) {
+        statusText = "💥 **BUST!**";
+      } else if (dVal > 21 || pVal > dVal) {
+        payout = currentPot * 2;
+        statusText = "✅ **YOU WIN!**";
+        finalTitle = "🎉 WINNER";
+        finalColor = 0x2ecc71;
+      } else if (pVal === dVal) {
+        payout = currentPot;
+        statusText = "🤝 **PUSH**";
+        finalTitle = "🤝 TIED";
+        finalColor = 0x95a5a6;
+      } else {
+        statusText = "❌ **YOU LOSE**";
+      }
+
+      const finalUser = await User.findOneAndUpdate(
+        { userId },
+        { $inc: { gold: payout } },
+        { new: true },
+      );
+
+      await interaction
+        .editReply({
+          embeds: [createEmbed(finalTitle, finalColor, true, statusText)],
+          components: [],
+        })
+        .catch(() => null);
+
+      logToAudit(interaction.client, {
+        userId,
+        bet: currentBet,
+        amount: payout - currentPot,
+        oldBalance: initialBalance,
+        newBalance: finalUser.gold,
+        reason: `Blackjack: ${statusText.replace(/\*\*/g, "")}`,
+      }).catch(() => null);
     });
   },
 };
