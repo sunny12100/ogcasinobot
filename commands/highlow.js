@@ -16,7 +16,6 @@ module.exports = {
     const userId = interaction.user.id;
     const amount = repeatAmount ?? interaction.options.getInteger("amount");
 
-    // 1. DEFER & LOCK CHECK
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
@@ -27,7 +26,6 @@ module.exports = {
     }
 
     try {
-      // 2. FETCH USER & SNAPSHOT
       const userData = await User.findOne({ userId });
       if (!userData || userData.gold < amount) {
         const err = `❌ Not enough gold! Balance: \`${userData?.gold?.toLocaleString() || 0}\``;
@@ -36,9 +34,12 @@ module.exports = {
 
       const initialBalance = userData.gold;
       activeHighLow.add(userId);
-      const failSafe = setTimeout(() => activeHighLow.delete(userId), 30000);
 
-      // --- GAME CONFIG ---
+      // 1. DEDUCT GOLD IMMEDIATELY (Hold the bet)
+      await User.updateOne({ userId }, { $inc: { gold: -amount } });
+
+      let gameStarted = false; // Flag to check if they clicked a button
+
       const cards = [
         "2",
         "3",
@@ -95,9 +96,9 @@ module.exports = {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your game!", ephemeral: true });
 
+        gameStarted = true; // Prevents the AFK refund from triggering
         const choice = i.customId;
 
-        // --- GAME STEP ---
         if (choice === "higher" || choice === "lower") {
           await i.update({
             embeds: [
@@ -113,7 +114,6 @@ module.exports = {
           });
 
           setTimeout(async () => {
-            clearTimeout(failSafe);
             activeHighLow.delete(userId);
 
             const isLucky = Math.random() < 0.45;
@@ -139,12 +139,13 @@ module.exports = {
             const won =
               (choice === "higher" && userIndex > dealerIndex) ||
               (choice === "lower" && userIndex < dealerIndex);
-            const netChange = won ? amount : -amount;
 
-            // 3. ATOMIC UPDATE
+            // 2. PAYOUT CALCULATION
+            // If won, give back 2x (the original bet + the win). If lost, give 0.
+            const payout = won ? amount * 2 : 0;
             const updatedUser = await User.findOneAndUpdate(
               { userId },
-              { $inc: { gold: netChange } },
+              { $inc: { gold: payout } },
               { new: true },
             );
 
@@ -152,7 +153,7 @@ module.exports = {
               .setTitle(won ? "🎉 CORRECT!" : "💀 WRONG")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Dealer: **${dealerCard}** vs Your Card: **${userCard}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\nResult: You chose **${choice.toUpperCase()}** and were **${won ? "Right" : "Wrong"}**!\n\n💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+                `### Dealer: **${dealerCard}** vs Your Card: **${userCard}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\nResult: You chose **${choice.toUpperCase()}** and were **${won ? "Right" : "Wrong"}**!\n\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
               );
 
             const repeatRow = new ActionRowBuilder().addComponents(
@@ -172,17 +173,15 @@ module.exports = {
               components: [repeatRow],
             });
 
-            // 4. LOG TO AUDIT
             await logToAudit(interaction.client, {
               userId: userId,
               bet: amount,
-              amount: netChange,
+              amount: won ? amount : -amount,
               oldBalance: initialBalance,
               newBalance: updatedUser.gold,
               reason: `High-Low: ${choice.toUpperCase()} (Dealer: ${dealerCard} vs User: ${userCard})`,
             }).catch((err) => console.error("[AUDIT LOG ERROR]", err));
 
-            // 5. REPEAT LOGIC COLLECTOR
             const endCollector = finalMsg.createMessageComponentCollector({
               componentType: ComponentType.Button,
               time: 15000,
@@ -191,26 +190,36 @@ module.exports = {
             endCollector.on("collect", async (btnInt) => {
               if (btnInt.user.id !== userId)
                 return btnInt.reply({ content: "Not yours!", ephemeral: true });
-
               endCollector.stop();
-              activeHighLow.delete(userId); // Clear lock before re-running
-
-              if (btnInt.customId.startsWith("hl_rep_")) {
+              activeHighLow.delete(userId);
+              if (btnInt.customId.startsWith("hl_rep_"))
                 return this.execute(btnInt, amount);
-              }
-              if (btnInt.customId === "hl_quit") {
+              if (btnInt.customId === "hl_quit")
                 await btnInt.update({ components: [] });
-              }
             });
           }, 3000);
           collector.stop();
         }
       });
 
-      collector.on("end", (collected, reason) => {
+      collector.on("end", async (collected, reason) => {
         if (reason === "time") {
           activeHighLow.delete(userId);
-          interaction.editReply({ components: [] }).catch(() => null);
+
+          // 3. REFUND LOGIC
+          if (!gameStarted) {
+            await User.updateOne({ userId }, { $inc: { gold: amount } });
+            interaction
+              .editReply({
+                content:
+                  "⏲️ **Game Timed Out:** You didn't make a choice in time. Your bet has been refunded.",
+                embeds: [],
+                components: [],
+              })
+              .catch(() => null);
+          } else {
+            interaction.editReply({ components: [] }).catch(() => null);
+          }
         }
       });
     } catch (err) {
