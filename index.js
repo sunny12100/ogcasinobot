@@ -21,7 +21,9 @@ const { startTracking } = require("./checkTransactions");
 const User = require("./models/User");
 
 const MAIN_GUILD_ID = process.env.GUILD_ID;
-const WITHDRAW_LOG_CHANNEL_ID = "YOUR_WITHDRAW_CHANNEL_ID";
+
+// 🔔 SAME CHANNEL USED FOR DEPOSITS
+const ECONOMY_LOG_CHANNEL_ID = "PUT_YOUR_CHANNEL_ID_HERE";
 
 // ---------------- CLIENT ----------------
 const client = new Client({
@@ -55,7 +57,6 @@ client.once(Events.ClientReady, async () => {
 
   for (const guild of client.guilds.cache.values()) {
     if (guild.id !== MAIN_GUILD_ID) {
-      console.log(`🚫 Leaving unauthorized guild: ${guild.name} (${guild.id})`);
       await guild.leave();
     }
   }
@@ -65,9 +66,7 @@ client.once(Events.ClientReady, async () => {
 
 // ---------------- AUTO LEAVE ----------------
 client.on(Events.GuildCreate, async (guild) => {
-  if (guild.id !== MAIN_GUILD_ID) {
-    await guild.leave();
-  }
+  if (guild.id !== MAIN_GUILD_ID) await guild.leave();
 });
 
 // ---------------- INTERACTIONS ----------------
@@ -86,10 +85,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const cooldownAmount = 5000;
 
     if (cooldowns.has(userId)) {
-      const expirationTime = cooldowns.get(userId) + cooldownAmount;
-      if (now < expirationTime) {
+      const expiry = cooldowns.get(userId) + cooldownAmount;
+      if (now < expiry) {
         return interaction.reply({
-          content: `⏱️ Try again in **${((expirationTime - now) / 1000).toFixed(
+          content: `⏱️ Try again in **${((expiry - now) / 1000).toFixed(
             1,
           )}s**.`,
           ephemeral: true,
@@ -106,7 +105,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     try {
       await command.execute(interaction);
     } catch (err) {
-      console.error(err);
+      console.error("❌ Command Error:", err);
       if (!interaction.replied) {
         await interaction.reply({
           content: "❌ Error executing command.",
@@ -170,7 +169,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit()) {
     const userId = interaction.user.id;
 
-    // REGISTER
+    // ----- REGISTER -----
     if (interaction.customId === "register_modal") {
       const ttio = interaction.fields.getTextInputValue("ttio_username");
 
@@ -189,7 +188,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // WITHDRAW
+    // ----- WITHDRAW -----
     if (interaction.customId === "withdraw_modal") {
       const amount = parseInt(
         interaction.fields.getTextInputValue("withdraw_amount"),
@@ -223,38 +222,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
       userData.gold -= amount;
       await userData.save();
 
-      // ----- DM USER -----
+      // 🟢 SAME UI AS DEPOSIT (EMBED)
+      const withdrawEmbed = new EmbedBuilder()
+        .setColor(0x2ecc71) // SAME GREEN AS DEPOSIT
+        .setTitle("💸 Withdrawal Requested")
+        .addFields(
+          { name: "User", value: `<@${userId}>`, inline: false },
+          { name: "Requested", value: `${amount} gold`, inline: true },
+          { name: "Fee", value: `${fee} gold`, inline: true },
+          { name: "You Receive", value: `${receiveAmount} gold`, inline: true },
+        )
+        .setTimestamp();
+
+      // ----- POST TO SAME CHANNEL AS DEPOSITS -----
       try {
-        await interaction.user.send(
-          `💸 **Withdrawal Requested**\n\n` +
-            `Requested: **${amount}** gold\n` +
-            `Fee: **${fee}** gold\n` +
-            `You will receive: **${receiveAmount}** gold`,
+        const channel = await interaction.guild.channels.fetch(
+          ECONOMY_LOG_CHANNEL_ID,
         );
-      } catch {}
-
-      // ----- LOG CHANNEL -----
-      const logChannel = interaction.guild.channels.cache.get(
-        WITHDRAW_LOG_CHANNEL_ID,
-      );
-
-      if (logChannel) {
-        const embed = new EmbedBuilder()
-          .setTitle("💸 Withdrawal Request")
-          .setColor(0xf1c40f)
-          .addFields(
-            { name: "User", value: `<@${userId}>`, inline: false },
-            { name: "Amount", value: `${amount}`, inline: true },
-            { name: "Fee", value: `${fee}`, inline: true },
-            { name: "Net", value: `${receiveAmount}`, inline: true },
-          )
-          .setTimestamp();
-
-        await logChannel.send({ embeds: [embed] });
+        if (channel?.isTextBased()) {
+          await channel.send({ embeds: [withdrawEmbed] });
+        }
+      } catch (err) {
+        console.error("❌ Withdraw channel log failed:", err);
       }
 
+      // ----- DM USER (SAME UI AS DEPOSIT) -----
+      try {
+        await interaction.user.send({ embeds: [withdrawEmbed] });
+      } catch {}
+
+      // ----- FINAL REPLY (NO EARLY RETURN ABOVE THIS) -----
       return interaction.reply({
-        content: `✅ Withdrawal request sent.\nYou will receive **${receiveAmount}** gold.`,
+        content: `✅ Withdrawal request submitted.\nYou will receive **${receiveAmount}** gold.`,
         ephemeral: true,
       });
     }
