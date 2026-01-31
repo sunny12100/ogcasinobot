@@ -40,9 +40,9 @@ const fairMultiplier = (mines, revealed) => {
 /* ---------------- MAX MULT BY MINE COUNT ---------------- */
 const getMaxMultiplier = (mines) => {
   if (mines <= 5) return 2.0;
-  if (mines <= 10) return 2.5;
-  if (mines <= 16) return 3.0;
-  return 3.5;
+  if (mines <= 10) return 2.0;
+  if (mines <= 16) return 2.5;
+  return 3.0;
 };
 
 /* ---------------- LOGARITHMIC SOFT CAP ---------------- */
