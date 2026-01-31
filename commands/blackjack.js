@@ -66,32 +66,50 @@ module.exports = {
     }
     deck.sort(() => Math.random() - 0.5);
 
+    // ✅ FIXED ACE LOGIC
     const getVal = (hand) => {
-      let total = 0,
-        aces = 0;
+      let total = 0;
+      let aces = 0;
+
       for (const card of hand) {
         const v = card.replace(/[`♠️❤️♣️♦️]/g, "");
-        if (v === "A") aces++;
-        else if (["J", "Q", "K"].includes(v)) total += 10;
-        else total += parseInt(v);
+        if (v === "A") {
+          aces++;
+          total += 1;
+        } else if (["J", "Q", "K"].includes(v)) {
+          total += 10;
+        } else {
+          total += parseInt(v);
+        }
       }
-      for (let i = 0; i < aces; i++) total += total + 11 <= 21 ? 11 : 1;
+
+      while (aces > 0 && total + 10 <= 21) {
+        total += 10;
+        aces--;
+      }
+
       return total;
     };
 
-    // --- STEALTH RIGGING ---
-    const shouldPlayerLose = Math.random() > 0.4;
+    // 🎭 SOFT BIAS (NOT FORCE LOSS)
+    const shouldBiasDealer = currentBet >= 100 && Math.random() < 0.45;
 
-    const riggedPop = (targetLoss = false, currentHandValue = 0) => {
-      if (!targetLoss) return deck.pop();
-      // Search for a bust card (10+)
-      const cardIdx = deck.findIndex((card) => {
-        const val = getVal([card]);
-        return currentHandValue + val > 21;
+    const riggedPop = (bias = false, handVal = 0) => {
+      if (!bias || handVal < 12) return deck.pop();
+
+      const riskyCards = deck.filter((card) => {
+        const v = card.replace(/[`♠️❤️♣️♦️]/g, "");
+        const val =
+          v === "A" ? 11 : ["J", "Q", "K"].includes(v) ? 10 : parseInt(v);
+        return handVal + val > 21;
       });
-      if (cardIdx !== -1 && Math.random() > 0.4) {
-        return deck.splice(cardIdx, 1)[0];
+
+      if (riskyCards.length && Math.random() < 0.35) {
+        const card = riskyCards[Math.floor(Math.random() * riskyCards.length)];
+        deck.splice(deck.indexOf(card), 1);
+        return card;
       }
+
       return deck.pop();
     };
 
@@ -128,7 +146,9 @@ module.exports = {
           },
         )
         .setFooter({
-          text: `💰 Bet: ${currentPot} | Session ID: ${Math.floor(Math.random() * 99999)}`,
+          text: `💰 Bet: ${currentPot} | Session ID: ${Math.floor(
+            Math.random() * 99999,
+          )}`,
         });
 
     const buildButtons = async () => {
@@ -155,7 +175,7 @@ module.exports = {
       return row;
     };
 
-    // Initial Blackjack Check
+    // --- INITIAL BLACKJACK CHECK ---
     if (getVal(playerHand) === 21) {
       activeBlackjack.delete(userId);
       endedByPlayer = true;
@@ -192,7 +212,7 @@ module.exports = {
       isProcessing = true;
 
       if (i.customId === "hit") {
-        playerHand.push(riggedPop(shouldPlayerLose, getVal(playerHand)));
+        playerHand.push(riggedPop(shouldBiasDealer, getVal(playerHand)));
         if (getVal(playerHand) >= 21) {
           endedByPlayer = true;
           collector.stop("ended");
@@ -215,7 +235,7 @@ module.exports = {
         }
         await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
         currentPot *= 2;
-        playerHand.push(riggedPop(shouldPlayerLose, getVal(playerHand)));
+        playerHand.push(riggedPop(shouldBiasDealer, getVal(playerHand)));
         endedByPlayer = true;
         collector.stop("ended");
         await i.deferUpdate();
@@ -228,16 +248,26 @@ module.exports = {
 
     collector.on("end", async () => {
       activeBlackjack.delete(userId);
-      if (!endedByPlayer) endedByPlayer = true;
 
       let pVal = getVal(playerHand);
       let dVal = getVal(dealerHand);
 
       if (pVal <= 21) {
-        while (dVal < 17 || (shouldPlayerLose && dVal <= pVal && dVal < 21)) {
+        while (dVal < 17) {
           dealerHand.push(deck.pop());
           dVal = getVal(dealerHand);
         }
+      }
+
+      // 🎯 SOFT EDGE (ONLY CLOSE GAMES)
+      if (
+        shouldBiasDealer &&
+        pVal <= 21 &&
+        dVal <= 21 &&
+        Math.abs(pVal - dVal) === 1 &&
+        Math.random() < 0.5
+      ) {
+        dVal = pVal + 1;
       }
 
       let statusText = "",
@@ -266,6 +296,7 @@ module.exports = {
         { $inc: { gold: payout } },
         { new: true },
       );
+
       await interaction
         .editReply({
           embeds: [createEmbed(finalTitle, finalColor, true, statusText)],
