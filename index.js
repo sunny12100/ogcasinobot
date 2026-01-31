@@ -21,6 +21,7 @@ const { startTracking } = require("./checkTransactions");
 const User = require("./models/User");
 
 const MAIN_GUILD_ID = process.env.GUILD_ID;
+const WITHDRAW_LOG_CHANNEL_ID = "YOUR_WITHDRAW_CHANNEL_ID";
 
 // ---------------- CLIENT ----------------
 const client = new Client({
@@ -52,12 +53,9 @@ for (const file of commandFiles) {
 client.once(Events.ClientReady, async () => {
   console.log(`✅ ${client.user.tag} is online!`);
 
-  // 🔐 ENFORCE SINGLE SERVER (STARTUP CLEANUP)
   for (const guild of client.guilds.cache.values()) {
     if (guild.id !== MAIN_GUILD_ID) {
-      console.log(
-        `🚫 Leaving unauthorized guild on startup: ${guild.name} (${guild.id})`,
-      );
+      console.log(`🚫 Leaving unauthorized guild: ${guild.name} (${guild.id})`);
       await guild.leave();
     }
   }
@@ -65,19 +63,15 @@ client.once(Events.ClientReady, async () => {
   startTracking(client);
 });
 
-// ---------------- AUTO LEAVE ON INVITE ----------------
+// ---------------- AUTO LEAVE ----------------
 client.on(Events.GuildCreate, async (guild) => {
   if (guild.id !== MAIN_GUILD_ID) {
-    console.log(
-      `🚫 Unauthorized guild detected: ${guild.name} (${guild.id}) — leaving`,
-    );
     await guild.leave();
   }
 });
 
 // ---------------- INTERACTIONS ----------------
 client.on(Events.InteractionCreate, async (interaction) => {
-  // 🔐 BLOCK ANY INTERACTION OUTSIDE MAIN GUILD
   if (interaction.guildId !== MAIN_GUILD_ID) {
     return interaction.reply({
       content: "🚫 This bot is not authorized for this server.",
@@ -85,7 +79,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
   }
 
-  // ---------------- SLASH COMMANDS ----------------
+  // ---------- SLASH COMMANDS ----------
   if (interaction.isChatInputCommand()) {
     const userId = interaction.user.id;
     const now = Date.now();
@@ -95,10 +89,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const expirationTime = cooldowns.get(userId) + cooldownAmount;
       if (now < expirationTime) {
         return interaction.reply({
-          content: `⏱️ Slow down! Try again in **${(
-            (expirationTime - now) /
-            1000
-          ).toFixed(1)}s**.`,
+          content: `⏱️ Try again in **${((expirationTime - now) / 1000).toFixed(
+            1,
+          )}s**.`,
           ephemeral: true,
         });
       }
@@ -112,23 +105,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     try {
       await command.execute(interaction);
-    } catch (error) {
-      console.error("❌ Command Error:", error);
-
-      const payload = {
-        content: "❌ There was an error executing this command.",
-        ephemeral: true,
-      };
-
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(payload).catch(() => null);
-      } else {
-        await interaction.reply(payload).catch(() => null);
+    } catch (err) {
+      console.error(err);
+      if (!interaction.replied) {
+        await interaction.reply({
+          content: "❌ Error executing command.",
+          ephemeral: true,
+        });
       }
     }
   }
 
-  // ---------------- BUTTONS ----------------
+  // ---------- BUTTONS ----------
   if (interaction.isButton()) {
     try {
       if (interaction.customId === "open_register_modal") {
@@ -136,17 +124,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setCustomId("register_modal")
           .setTitle("Account Registration");
 
-        const usernameInput = new TextInputBuilder()
-          .setCustomId("ttio_username")
-          .setLabel("Territorial.io Account ID")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-
         modal.addComponents(
-          new ActionRowBuilder().addComponents(usernameInput),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("ttio_username")
+              .setLabel("Territorial.io Account ID")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true),
+          ),
         );
 
-        await interaction.showModal(modal);
+        return interaction.showModal(modal);
       }
 
       if (interaction.customId === "open_withdraw_modal") {
@@ -154,49 +142,49 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setCustomId("withdraw_modal")
           .setTitle("Withdraw Gold");
 
-        const amountInput = new TextInputBuilder()
-          .setCustomId("withdraw_amount")
-          .setLabel("Amount to Withdraw (Min: 50)")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-
-        const accountInput = new TextInputBuilder()
-          .setCustomId("withdraw_account")
-          .setLabel("Destination Account ID (Optional)")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false);
-
         modal.addComponents(
-          new ActionRowBuilder().addComponents(amountInput),
-          new ActionRowBuilder().addComponents(accountInput),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("withdraw_amount")
+              .setLabel("Amount to Withdraw (Min: 50)")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true),
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("withdraw_account")
+              .setLabel("Destination Account ID (Optional)")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(false),
+          ),
         );
 
-        await interaction.showModal(modal);
+        return interaction.showModal(modal);
       }
     } catch (err) {
       console.error("❌ Button Error:", err);
     }
   }
 
-  // ---------------- MODALS ----------------
+  // ---------- MODALS ----------
   if (interaction.isModalSubmit()) {
     const userId = interaction.user.id;
 
     // REGISTER
     if (interaction.customId === "register_modal") {
-      const ttioName = interaction.fields.getTextInputValue("ttio_username");
+      const ttio = interaction.fields.getTextInputValue("ttio_username");
 
       await User.findOneAndUpdate(
         { userId },
-        { ttio: ttioName, $setOnInsert: { gold: 0, verified: false } },
-        { upsert: true, new: true },
+        { ttio, $setOnInsert: { gold: 0, verified: false } },
+        { upsert: true },
       );
 
       const role = interaction.guild.roles.cache.get("1465208410852294708");
       if (role) await interaction.member.roles.add(role).catch(() => null);
 
       return interaction.reply({
-        content: `✅ Linked to **${ttioName}**.\nSend gold to **AWwh_** to verify.`,
+        content: `✅ Linked to **${ttio}**.\nSend gold to **AWwh_** to verify.`,
         ephemeral: true,
       });
     }
@@ -235,8 +223,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
       userData.gold -= amount;
       await userData.save();
 
-      await interaction.reply({
-        content: `✅ Withdrawal request sent. You will receive **${receiveAmount}** gold.`,
+      // ----- DM USER -----
+      try {
+        await interaction.user.send(
+          `💸 **Withdrawal Requested**\n\n` +
+            `Requested: **${amount}** gold\n` +
+            `Fee: **${fee}** gold\n` +
+            `You will receive: **${receiveAmount}** gold`,
+        );
+      } catch {}
+
+      // ----- LOG CHANNEL -----
+      const logChannel = interaction.guild.channels.cache.get(
+        WITHDRAW_LOG_CHANNEL_ID,
+      );
+
+      if (logChannel) {
+        const embed = new EmbedBuilder()
+          .setTitle("💸 Withdrawal Request")
+          .setColor(0xf1c40f)
+          .addFields(
+            { name: "User", value: `<@${userId}>`, inline: false },
+            { name: "Amount", value: `${amount}`, inline: true },
+            { name: "Fee", value: `${fee}`, inline: true },
+            { name: "Net", value: `${receiveAmount}`, inline: true },
+          )
+          .setTimestamp();
+
+        await logChannel.send({ embeds: [embed] });
+      }
+
+      return interaction.reply({
+        content: `✅ Withdrawal request sent.\nYou will receive **${receiveAmount}** gold.`,
         ephemeral: true,
       });
     }
