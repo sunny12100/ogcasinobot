@@ -40,24 +40,25 @@ module.exports = {
       });
     }
 
+    // --- INITIALIZATION & DEDUCTION ---
     activeMines.add(userId);
     const initialBalance = userData.gold;
     await User.updateOne({ userId }, { $inc: { gold: -amount } });
 
     let revealed = 0;
     let isGameOver = false;
+    let gameStarted = false; // Flag for AFK Refund logic
     const revealedIndices = [];
     const bombIndices = [];
 
-    // --- PSYCHOLOGICAL RIGGING: THE SLIPPERY SLOPE ---
-    // Click 1: 80% Win | Click 2: 60% Win | Click 3: 50% Win (The Hook) | Click 4+: Aggressive drop
-    const winChances = [0.8, 0.6, 0.5, 0.2, 0.1, 0.05];
+    // --- YOUR CUSTOM RIGGING TABLE ---
+    // Click 1: 50% | Click 2: 70% | Click 3: 60% | Click 4: 40% | 5+: Extreme Risk
+    const winChances = [0.5, 0.7, 0.6, 0.4, 0.1, 0.05];
 
     const getMultiplier = (rev) => {
       if (rev === 0) return 1.0;
-      // Multiplier grows faster early on to reward the 50/50 click
-      const base = 1.2;
-      return parseFloat(Math.pow(base, rev) + rev * 0.25).toFixed(2);
+      const base = 1.25; // Slightly boosted base for temptation
+      return parseFloat(Math.pow(base, rev) + rev * 0.2).toFixed(2);
     };
 
     const createGrid = (showLoss = false) => {
@@ -101,7 +102,7 @@ module.exports = {
       .setTitle("💣 MINES")
       .setColor(0xffaa00)
       .setDescription(
-        `💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\``,
+        `💰 **Bet:** \`${amount}\` | 💣 **Mines:** \`${mineCount}\`\nPick a square to start!`,
       );
 
     const msg = await interaction.reply({
@@ -112,12 +113,14 @@ module.exports = {
 
     const collector = msg.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 60000,
+      time: 60000, // 1 minute to play
     });
 
     collector.on("collect", async (i) => {
       if (i.user.id !== userId)
         return i.reply({ content: "❌ Not your game!", ephemeral: true });
+
+      gameStarted = true; // User interacted, disable AFK refund
 
       if (i.customId === "mine_cashout") {
         isGameOver = true;
@@ -154,15 +157,16 @@ module.exports = {
         return;
       }
 
+      // --- TILE CLICK LOGIC ---
       const idx = parseInt(i.customId.split("_")[1]);
       const currentWinChance = winChances[revealed] || 0.05;
 
       if (Math.random() > currentWinChance) {
-        // --- THE "FAIR" LOSS ---
+        // --- RIGGED LOSS ---
         isGameOver = true;
         bombIndices.push(idx);
 
-        // GHOST REVEAL: Fill the rest of the bomb slots to match player's choice
+        // Ghost Reveal: Fake the rest of the bomb positions
         while (bombIndices.length < mineCount) {
           let randomIdx = Math.floor(Math.random() * 20);
           if (
@@ -195,7 +199,7 @@ module.exports = {
 
         collector.stop("hit_bomb");
       } else {
-        // --- THE WIN ---
+        // --- RIGGED WIN ---
         revealed++;
         revealedIndices.push(idx);
         await safeUpdate(i, {
@@ -212,24 +216,26 @@ module.exports = {
     collector.on("end", async (collected, reason) => {
       activeMines.delete(userId);
 
-      if (reason === "time" && !isGameOver) {
-        const updatedUser = await User.findOneAndUpdate(
-          { userId },
-          { $inc: { gold: amount } },
-          { new: true },
-        );
+      // --- AFK REFUND LOGIC ---
+      if (reason === "time" && !gameStarted) {
+        await User.updateOne({ userId }, { $inc: { gold: amount } });
         await interaction
           .editReply({
             embeds: [
-              EmbedBuilder.from(baseEmbed)
+              new EmbedBuilder()
                 .setTitle("⏲️ TIMED OUT")
                 .setColor(0x95a5a6)
                 .setDescription(
-                  `Game timed out. Bet of **${amount}** refunded.`,
+                  `Game expired. Your bet of **${amount}** has been refunded.`,
                 ),
             ],
-            components: createGrid(true),
+            components: [], // Clear grid
           })
+          .catch(() => null);
+      } else if (reason === "time" && !isGameOver) {
+        // If they played but didn't cash out and time ran out, we treat it as a loss (No refund)
+        await interaction
+          .editReply({ components: createGrid(true) })
           .catch(() => null);
       }
     });
