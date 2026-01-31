@@ -196,17 +196,17 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (25-500)")
+        .setDescription("Gold to bet (25-200)")
         .setRequired(true)
         .setMinValue(25) // Updated to 25
-        .setMaxValue(500),
+        .setMaxValue(200),
     )
     .addIntegerOption((opt) =>
       opt
         .setName("mines")
-        .setDescription("Number of mines to hide (1-19)")
+        .setDescription("Number of mines to hide (6-19)")
         .setRequired(false)
-        .setMinValue(1)
+        .setMinValue(6)
         .setMaxValue(19),
     ),
 

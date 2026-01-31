@@ -59,7 +59,7 @@ module.exports = {
   name: "mines",
   async execute(interaction) {
     const amount = interaction.options.getInteger("amount");
-    const mineCount = interaction.options.getInteger("mines") || 3;
+    const mineCount = interaction.options.getInteger("mines") || 6;
     const userId = interaction.user.id;
 
     if (mineCount < 1 || mineCount > 19) {
