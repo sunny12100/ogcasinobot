@@ -49,14 +49,12 @@ client.once(Events.ClientReady, () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   // 1. HANDLE SLASH COMMANDS
   if (interaction.isChatInputCommand()) {
-    // --- COOLDOWN LOGIC START ---
     const userId = interaction.user.id;
     const now = Date.now();
-    const cooldownAmount = 5000; // 3 seconds in milliseconds
+    const cooldownAmount = 5000;
 
     if (cooldowns.has(userId)) {
       const expirationTime = cooldowns.get(userId) + cooldownAmount;
-
       if (now < expirationTime) {
         const timeLeft = (expirationTime - now) / 1000;
         return interaction.reply({
@@ -66,10 +64,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
-    // Set timestamp and auto-delete after cooldown ends
     cooldowns.set(userId, now);
     setTimeout(() => cooldowns.delete(userId), cooldownAmount);
-    // --- COOLDOWN LOGIC END ---
 
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
@@ -77,12 +73,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await command.execute(interaction);
     } catch (error) {
       console.error("❌ Command Execution Error:", error);
-
       const errorPayload = {
         content: "❌ There was an error executing this command!",
         ephemeral: true,
       };
-
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp(errorPayload).catch(() => null);
       } else {
@@ -104,7 +98,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("Enter your exact game Account ID (Example : AWwh_)")
           .setRequired(true);
-
         modal.addComponents(
           new ActionRowBuilder().addComponents(usernameInput),
         );
@@ -121,14 +114,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("e.g. 1000")
           .setRequired(true);
-
         const accountInput = new TextInputBuilder()
           .setCustomId("withdraw_account")
           .setLabel("Destination Account ID (Optional)")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("Leave blank to use your registered Account ID")
           .setRequired(false);
-
         modal.addComponents(
           new ActionRowBuilder().addComponents(amountInput),
           new ActionRowBuilder().addComponents(accountInput),
@@ -144,27 +135,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isModalSubmit()) {
     const userId = interaction.user.id;
 
-    // --- REGISTRATION SUBMISSION ---
     if (interaction.customId === "register_modal") {
       const ttioName = interaction.fields.getTextInputValue("ttio_username");
-
       await User.findOneAndUpdate(
         { userId: userId },
-        {
-          ttio: ttioName,
-          $setOnInsert: { gold: 0, verified: false },
-        },
+        { ttio: ttioName, $setOnInsert: { gold: 0, verified: false } },
         { upsert: true, new: true },
       );
 
       const ROLE_ID = "1465208410852294708";
       const role = interaction.guild.roles.cache.get(ROLE_ID);
-
       if (role) {
         try {
           await interaction.member.roles.add(role);
-        } catch (error) {
-          console.error("❌ Role error:", error);
+        } catch (e) {
+          console.error(e);
         }
       }
 
@@ -174,7 +159,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // --- WITHDRAWAL SUBMISSION ---
     if (interaction.customId === "withdraw_modal") {
       const amountInput =
         interaction.fields.getTextInputValue("withdraw_amount");
@@ -182,17 +166,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const customAccount =
         interaction.fields.getTextInputValue("withdraw_account");
 
-      // 🛑 MINIMUM WITHDRAWAL CHECK
       if (isNaN(amount) || amount < 50) {
         return interaction.reply({
-          content:
-            "❌ **Withdrawal Failed:** The minimum amount you can withdraw is `50` gold.",
+          content: "❌ **Withdrawal Failed:** Minimum withdrawal is `50` gold.",
           ephemeral: true,
         });
       }
 
       const userData = await User.findOne({ userId: userId });
-
       if (!userData || !userData.verified) {
         return interaction.reply({
           content: "❌ You must be verified to withdraw.",
@@ -207,65 +188,61 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
 
-      const target = customAccount || userData?.ttio || "Unknown";
-      const fee = Math.floor(amount * 0.03); // 3% fee
+      const target = customAccount || userData.ttio || "Unknown";
+      const fee = Math.floor(amount * 0.03);
       const receiveAmount = amount - fee;
 
-      // Update Database
       userData.gold -= amount;
       await userData.save();
 
-      // Create Receipt for User
+      // --- UNIFIED WITHDRAWAL UI (Matches Deposit Style) ---
       const receiptEmbed = new EmbedBuilder()
-        .setTitle("📤 Withdrawal Requested")
-        .setColor(0x3498db)
+        .setTitle("📤 Withdrawal Request")
+        .setColor(0xe74c3c)
+        .setThumbnail(interaction.user.displayAvatarURL())
         .addFields(
+          { name: "👤 User", value: `<@${userId}>`, inline: true },
+          { name: "🎮 Destination", value: `\`${target}\``, inline: true },
           {
             name: "💰 Total Deducted",
-            value: `${amount.toLocaleString()} Gold`,
-            inline: true,
+            value: `\`${amount.toLocaleString()}\` Gold`,
+            inline: false,
           },
           {
             name: "📉 Service Fee (3%)",
-            value: `-${fee.toLocaleString()} Gold`,
+            value: `\`${fee.toLocaleString()}\` Gold`,
             inline: true,
           },
           {
-            name: "🎁 You Receive",
+            name: "🎁 Net Payout",
             value: `**${receiveAmount.toLocaleString()} Gold**`,
             inline: true,
           },
-          { name: "🎮 Destination", value: `\`${target}\``, inline: false },
         )
+        .setFooter({ text: `User ID: ${userId}` })
         .setTimestamp();
 
-      await interaction.user.send({ embeds: [receiptEmbed] }).catch(() => null);
-
-      // Log for Admins
+      // --- LOG TO CHANNEL ---
       const logChannelId = process.env.LOG_CHANNEL_ID;
-      const logChannel =
-        client.channels.cache.get(logChannelId) ||
-        (await client.channels.fetch(logChannelId).catch(() => null));
-
-      if (logChannel) {
-        logChannel.send({
-          content: `🚨 **NEW WITHDRAWAL**`,
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xffa500)
-              .addFields(
-                { name: "User", value: `<@${userId}>`, inline: true },
-                { name: "Target", value: `\`${target}\``, inline: true },
-                {
-                  name: "Payout",
-                  value: `**${receiveAmount.toLocaleString()}**`,
-                  inline: true,
-                },
-              )
-              .setTimestamp(),
-          ],
-        });
+      try {
+        const logChannel = await client.channels.fetch(logChannelId);
+        if (logChannel) {
+          await logChannel.send({
+            content: `🚨 **NEW WITHDRAWAL** from <@${userId}>`,
+            embeds: [receiptEmbed],
+          });
+        }
+      } catch (err) {
+        console.error("❌ Withdrawal Log Channel Error:", err);
       }
+
+      // --- SEND DM ---
+      await interaction.user
+        .send({
+          content: "✅ Your withdrawal request has been submitted.",
+          embeds: [receiptEmbed],
+        })
+        .catch(() => null);
 
       await interaction.reply({
         content: `✅ **Request Sent!** You will receive **${receiveAmount.toLocaleString()}** gold shortly.`,
