@@ -185,12 +185,11 @@ module.exports = {
           .setStyle(ButtonStyle.Secondary),
       );
 
-      const freshUser = await User.findOne({ userId });
-
+      // Allow split if two cards match AND user has enough gold left for a second bet
       if (
         playerHand.length === 2 &&
         cardVal(playerHand[0]) === cardVal(playerHand[1]) &&
-        freshUser.gold >= currentBet
+        initialBalance - currentPot >= currentBet
       ) {
         row.addComponents(
           new ButtonBuilder()
@@ -258,6 +257,7 @@ module.exports = {
       }
 
       if (i.customId === "split") {
+        // Deduct second bet for split
         await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
         currentPot *= 2;
 
