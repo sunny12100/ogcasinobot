@@ -90,7 +90,6 @@ module.exports = {
 
       for (const card of hand) {
         const v = card.replace(/[♠️❤️♣️♦️]/g, "");
-
         if (v === "A") {
           aces++;
           total += 1;
@@ -170,9 +169,7 @@ module.exports = {
             inline: false,
           },
         )
-        .setFooter({
-          text: `💰 Bet: ${currentPot}`,
-        });
+        .setFooter({ text: `💰 Bet: ${currentPot}` });
 
     /* -------------------- BUTTONS -------------------- */
 
@@ -189,15 +186,6 @@ module.exports = {
       );
 
       const freshUser = await User.findOne({ userId });
-
-      if (playerHand.length === 2 && freshUser.gold >= currentBet) {
-        row.addComponents(
-          new ButtonBuilder()
-            .setCustomId("double")
-            .setLabel("Double Down")
-            .setStyle(ButtonStyle.Danger),
-        );
-      }
 
       if (
         playerHand.length === 2 &&
@@ -257,7 +245,6 @@ module.exports = {
       if (isProcessing) return;
       isProcessing = true;
 
-      /* ---------- HIT ---------- */
       if (i.customId === "hit") {
         playerHand.push(riggedPop(shouldBiasDealer, getVal(playerHand)));
 
@@ -270,18 +257,6 @@ module.exports = {
         isProcessing = false;
       }
 
-      /* ---------- DOUBLE ---------- */
-      if (i.customId === "double") {
-        await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
-        currentPot *= 2;
-
-        playerHand.push(riggedPop(shouldBiasDealer, getVal(playerHand)));
-        endedByPlayer = true;
-        collector.stop("ended");
-        await i.deferUpdate();
-      }
-
-      /* ---------- SPLIT ---------- */
       if (i.customId === "split") {
         await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
         currentPot *= 2;
@@ -311,7 +286,6 @@ module.exports = {
         return;
       }
 
-      /* ---------- STAND ---------- */
       if (i.customId === "stand") {
         if (isSplit && activeHandIndex === 0) {
           splitHands[0] = playerHand;
