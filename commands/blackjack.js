@@ -48,6 +48,11 @@ module.exports = {
     let currentPot = currentBet;
     let isProcessing = false;
     let endedByPlayer = false;
+    let afk = false;
+
+    let isSplit = false;
+    let splitHands = [];
+    let activeHandIndex = 0;
 
     /* -------------------- DECK (6 DECKS) -------------------- */
 
@@ -71,9 +76,7 @@ module.exports = {
     let deck = [];
     for (let i = 0; i < 6; i++) {
       for (const s of suits) {
-        for (const v of values) {
-          deck.push(`${v}${s}`);
-        }
+        for (const v of values) deck.push(`${v}${s}`);
       }
     }
 
@@ -106,6 +109,8 @@ module.exports = {
       return total;
     };
 
+    const cardVal = (card) => card.replace(/[♠️❤️♣️♦️]/g, "");
+
     /* -------------------- SOFT BIAS -------------------- */
 
     const shouldBiasDealer = currentBet >= 100 && Math.random() < 0.45;
@@ -114,7 +119,7 @@ module.exports = {
       if (!bias || handVal < 12) return deck.pop();
 
       const riskyCards = deck.filter((card) => {
-        const v = card.replace(/[♠️❤️♣️♦️]/g, "");
+        const v = cardVal(card);
         const val =
           v === "A" ? 11 : ["J", "Q", "K"].includes(v) ? 10 : parseInt(v);
         return handVal + val > 21;
@@ -134,7 +139,7 @@ module.exports = {
     let playerHand = [deck.pop(), deck.pop()];
     let dealerHand = [deck.pop(), deck.pop()];
 
-    /* -------------------- EMBEDS -------------------- */
+    /* -------------------- EMBED -------------------- */
 
     const createEmbed = (
       title,
@@ -160,15 +165,13 @@ module.exports = {
             inline: true,
           },
           {
-            name: "🂠 Cards remaining",
-            value: `${deck.length}`,
+            name: "🂠 Deck",
+            value: `Remaining cards: **${deck.length}**`,
             inline: false,
           },
         )
         .setFooter({
-          text: `💰 Bet: ${currentPot} | Session ID: ${Math.floor(
-            Math.random() * 99999,
-          )}`,
+          text: `💰 Bet: ${currentPot}`,
         });
 
     /* -------------------- BUTTONS -------------------- */
@@ -186,6 +189,7 @@ module.exports = {
       );
 
       const freshUser = await User.findOne({ userId });
+
       if (playerHand.length === 2 && freshUser.gold >= currentBet) {
         row.addComponents(
           new ButtonBuilder()
@@ -195,14 +199,26 @@ module.exports = {
         );
       }
 
+      if (
+        playerHand.length === 2 &&
+        cardVal(playerHand[0]) === cardVal(playerHand[1]) &&
+        freshUser.gold >= currentBet
+      ) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId("split")
+            .setLabel("Split")
+            .setStyle(ButtonStyle.Success),
+        );
+      }
+
       return row;
     };
 
-    /* -------------------- NATURAL BLACKJACK -------------------- */
+    /* -------------------- INITIAL BLACKJACK -------------------- */
 
     if (getVal(playerHand) === 21) {
       activeBlackjack.delete(userId);
-      endedByPlayer = true;
 
       const dVal = getVal(dealerHand);
       const payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
@@ -235,39 +251,27 @@ module.exports = {
     });
 
     collector.on("collect", async (i) => {
-      if (i.user.id !== userId) {
+      if (i.user.id !== userId)
         return i.reply({ content: "Not your game!", ephemeral: true });
-      }
 
       if (isProcessing) return;
       isProcessing = true;
 
+      /* ---------- HIT ---------- */
       if (i.customId === "hit") {
         playerHand.push(riggedPop(shouldBiasDealer, getVal(playerHand)));
 
         if (getVal(playerHand) >= 21) {
           endedByPlayer = true;
           collector.stop("ended");
-          await i.deferUpdate();
-        } else {
-          await i.update({
-            embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
-            components: [await buildButtons()],
-          });
-          isProcessing = false;
         }
+
+        await i.deferUpdate();
+        isProcessing = false;
       }
 
+      /* ---------- DOUBLE ---------- */
       if (i.customId === "double") {
-        const freshUser = await User.findOne({ userId });
-        if (freshUser.gold < currentBet) {
-          isProcessing = false;
-          return i.reply({
-            content: "❌ Not enough gold to double!",
-            ephemeral: true,
-          });
-        }
-
         await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
         currentPot *= 2;
 
@@ -277,58 +281,95 @@ module.exports = {
         await i.deferUpdate();
       }
 
+      /* ---------- SPLIT ---------- */
+      if (i.customId === "split") {
+        await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
+        currentPot *= 2;
+
+        isSplit = true;
+        splitHands = [
+          [playerHand[0], deck.pop()],
+          [playerHand[1], deck.pop()],
+        ];
+
+        activeHandIndex = 0;
+        playerHand = splitHands[0];
+
+        await i.update({
+          embeds: [
+            createEmbed(
+              "🃏 BLACKJACK (SPLIT)",
+              0x5865f2,
+              false,
+              "Playing Hand 1",
+            ),
+          ],
+          components: [await buildButtons()],
+        });
+
+        isProcessing = false;
+        return;
+      }
+
+      /* ---------- STAND ---------- */
       if (i.customId === "stand") {
+        if (isSplit && activeHandIndex === 0) {
+          splitHands[0] = playerHand;
+          activeHandIndex = 1;
+          playerHand = splitHands[1];
+
+          await i.update({
+            embeds: [
+              createEmbed(
+                "🃏 BLACKJACK (SPLIT)",
+                0x5865f2,
+                false,
+                "Playing Hand 2",
+              ),
+            ],
+            components: [await buildButtons()],
+          });
+
+          isProcessing = false;
+          return;
+        }
+
         endedByPlayer = true;
         collector.stop("ended");
         await i.deferUpdate();
       }
     });
 
-    /* -------------------- RESOLUTION -------------------- */
+    /* -------------------- END / AFK -------------------- */
 
-    collector.on("end", async () => {
+    collector.on("end", async (_, reason) => {
       activeBlackjack.delete(userId);
+      if (!endedByPlayer && reason === "time") afk = true;
 
-      let pVal = getVal(playerHand);
+      let pHands = isSplit ? splitHands : [playerHand];
       let dVal = getVal(dealerHand);
 
-      if (pVal <= 21) {
-        while (dVal < 17) {
-          dealerHand.push(deck.pop());
-          dVal = getVal(dealerHand);
-        }
+      while (dVal < 17) {
+        dealerHand.push(deck.pop());
+        dVal = getVal(dealerHand);
       }
 
-      if (
-        shouldBiasDealer &&
-        pVal <= 21 &&
-        dVal <= 21 &&
-        Math.abs(pVal - dVal) === 1 &&
-        Math.random() < 0.5
-      ) {
-        dVal = pVal + 1;
-      }
-
-      let statusText = "";
       let payout = 0;
-      let finalTitle = "💀 DEFEAT";
-      let finalColor = 0xe74c3c;
 
-      if (pVal > 21) {
-        statusText = "💥 **BUST!**";
-      } else if (dVal > 21 || pVal > dVal) {
-        payout = currentPot * 2;
-        statusText = "✅ **YOU WIN!**";
-        finalTitle = "🎉 WINNER";
-        finalColor = 0x2ecc71;
-      } else if (pVal === dVal) {
-        payout = currentPot;
-        statusText = "🤝 **PUSH**";
-        finalTitle = "🤝 TIED";
-        finalColor = 0x95a5a6;
-      } else {
-        statusText = "❌ **YOU LOSE**";
+      for (const hand of pHands) {
+        const pVal = getVal(hand);
+        if (pVal > 21) continue;
+        if (dVal > 21 || pVal > dVal) payout += currentBet * 2;
+        else if (pVal === dVal) payout += currentBet;
       }
+
+      const statusText = afk
+        ? "⏱️ **AFK — Auto Stand**"
+        : payout > currentPot
+          ? "✅ **YOU WIN!**"
+          : payout === currentPot
+            ? "🤝 **PUSH**"
+            : "❌ **YOU LOSE**";
 
       const finalUser = await User.findOneAndUpdate(
         { userId },
@@ -336,12 +377,17 @@ module.exports = {
         { new: true },
       );
 
-      await interaction
-        .editReply({
-          embeds: [createEmbed(finalTitle, finalColor, true, statusText)],
-          components: [],
-        })
-        .catch(() => null);
+      await interaction.editReply({
+        embeds: [
+          createEmbed(
+            payout > currentPot ? "🎉 WINNER" : "💀 RESULT",
+            payout > currentPot ? 0x2ecc71 : 0xe74c3c,
+            true,
+            statusText,
+          ),
+        ],
+        components: [],
+      });
 
       logToAudit(interaction.client, {
         userId,
