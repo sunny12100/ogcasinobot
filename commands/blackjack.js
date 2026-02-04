@@ -11,12 +11,52 @@ const { logToAudit } = require("../utils/logger");
 const activeBlackjack = new Set();
 const MAX_BET = 200;
 
+/* -------------------- PERSISTENT DECK -------------------- */
+// This stays outside the module.exports so it persists between command calls
+let globalDeck = [];
+
+const shuffleShoe = () => {
+  const suits = ["♠️", "❤️", "♣️", "♦️"];
+  const values = [
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K",
+    "A",
+  ];
+  let newDeck = [];
+  // Standard 6-deck shoe
+  for (let i = 0; i < 6; i++) {
+    for (const s of suits) {
+      for (const v of values) newDeck.push(`${v}${s}`);
+    }
+  }
+  newDeck.sort(() => Math.random() - 0.5);
+  globalDeck = newDeck;
+};
+
+// Initial shuffle when the bot starts/loads the file
+shuffleShoe();
+
 module.exports = {
   name: "blackjack",
 
   async execute(interaction) {
     const userId = interaction.user.id;
     const currentBet = interaction.options.getInteger("amount");
+
+    // Check if deck needs reshuffling before starting
+    if (globalDeck.length < 20) {
+      shuffleShoe();
+    }
 
     if (currentBet > MAX_BET) {
       return interaction.reply({
@@ -32,7 +72,6 @@ module.exports = {
       });
     }
 
-    // 1. Defer early to prevent "Interaction Failed"
     await interaction.deferReply();
 
     const userData = await User.findOne({ userId });
@@ -49,31 +88,6 @@ module.exports = {
     let isSplit = false;
     let splitHands = [];
     let activeHandIndex = 0;
-
-    /* -------------------- DECK -------------------- */
-    const suits = ["♠️", "❤️", "♣️", "♦️"];
-    const values = [
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "10",
-      "J",
-      "Q",
-      "K",
-      "A",
-    ];
-    let deck = [];
-    for (let i = 0; i < 6; i++) {
-      for (const s of suits) {
-        for (const v of values) deck.push(`${v}${s}`);
-      }
-    }
-    deck.sort(() => Math.random() - 0.5);
 
     const getVal = (hand) => {
       let total = 0;
@@ -98,8 +112,9 @@ module.exports = {
     /* -------------------- RIGGING -------------------- */
     const shouldBiasDealer = currentBet >= 100 && Math.random() < 0.45;
     const riggedPop = (bias = false, handVal = 0) => {
-      if (!bias || handVal < 12) return deck.pop();
-      const riskyCards = deck.filter((card) => {
+      // Use globalDeck instead of local deck
+      if (!bias || handVal < 12) return globalDeck.pop();
+      const riskyCards = globalDeck.filter((card) => {
         const v = cardVal(card);
         const val =
           v === "A" ? 11 : ["J", "Q", "K"].includes(v) ? 10 : parseInt(v);
@@ -107,14 +122,14 @@ module.exports = {
       });
       if (riskyCards.length && Math.random() < 0.35) {
         const card = riskyCards[Math.floor(Math.random() * riskyCards.length)];
-        deck.splice(deck.indexOf(card), 1);
+        globalDeck.splice(globalDeck.indexOf(card), 1);
         return card;
       }
-      return deck.pop();
+      return globalDeck.pop();
     };
 
-    let playerHand = [deck.pop(), deck.pop()];
-    let dealerHand = [deck.pop(), deck.pop()];
+    let playerHand = [globalDeck.pop(), globalDeck.pop()];
+    let dealerHand = [globalDeck.pop(), globalDeck.pop()];
 
     const createEmbed = (
       title,
@@ -122,7 +137,7 @@ module.exports = {
       showDealer = false,
       status = "Your move!",
     ) => {
-      const embed = new EmbedBuilder()
+      return new EmbedBuilder()
         .setTitle(title)
         .setColor(color)
         .setDescription(`**GAME STATUS**\n> ${status}\n${"▬".repeat(25)}`)
@@ -141,9 +156,8 @@ module.exports = {
           },
         )
         .setFooter({
-          text: `💰 Bet: ${currentPot} | Cards left: ${deck.length}`,
+          text: `💰 Bet: ${currentPot} | Shoe: ${globalDeck.length} cards remaining`,
         });
-      return embed;
     };
 
     const buildButtons = async () => {
@@ -158,7 +172,6 @@ module.exports = {
           .setStyle(ButtonStyle.Secondary),
       );
 
-      // Robust check for split
       const freshUser = await User.findOne({ userId });
       const canSplit =
         playerHand.length === 2 &&
@@ -258,8 +271,8 @@ module.exports = {
         currentPot += currentBet;
         isSplit = true;
         splitHands = [
-          [playerHand[0], deck.pop()],
-          [playerHand[1], deck.pop()],
+          [playerHand[0], globalDeck.pop()],
+          [playerHand[1], globalDeck.pop()],
         ];
         playerHand = splitHands[0];
         activeHandIndex = 0;
@@ -285,22 +298,17 @@ module.exports = {
 
     collector.on("end", async (_, reason) => {
       activeBlackjack.delete(userId);
-
       let dVal = getVal(dealerHand);
-      // Dealer draws only if someone hasn't busted
       const pHands = isSplit ? splitHands : [playerHand];
-      const anyoneStillIn = pHands.some((h) => getVal(h) <= 21);
-
-      if (anyoneStillIn) {
+      if (pHands.some((h) => getVal(h) <= 21)) {
         while (dVal < 17) {
-          dealerHand.push(deck.pop());
+          dealerHand.push(globalDeck.pop());
           dVal = getVal(dealerHand);
         }
       }
 
       let totalPayout = 0;
       let handResults = [];
-
       for (let idx = 0; idx < pHands.length; idx++) {
         const pVal = getVal(pHands[idx]);
         const label = isSplit ? `Hand ${idx + 1}` : "Game";
@@ -322,17 +330,18 @@ module.exports = {
         { new: true },
       );
 
-      const finalEmbed = createEmbed(
-        totalPayout > currentPot ? "🎉 WINNER" : "💀 RESULT",
-        totalPayout > currentPot ? 0x2ecc71 : 0xe74c3c,
-        true,
-        reason === "time"
-          ? "⏱️ **AFK - Stand**\n" + handResults.join("\n")
-          : handResults.join("\n"),
-      );
-
       await interaction
-        .editReply({ embeds: [finalEmbed], components: [] })
+        .editReply({
+          embeds: [
+            createEmbed(
+              totalPayout > currentPot ? "🎉 WINNER" : "💀 RESULT",
+              totalPayout > currentPot ? 0x2ecc71 : 0xe74c3c,
+              true,
+              handResults.join("\n"),
+            ),
+          ],
+          components: [],
+        })
         .catch(() => null);
 
       logToAudit(interaction.client, {

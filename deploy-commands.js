@@ -32,9 +32,9 @@ const commands = [
     .addIntegerOption((option) =>
       option
         .setName("amount")
-        .setDescription("Amount of gold to bet (25-500)")
+        .setDescription("Amount of gold to bet (50-500)")
         .setRequired(true)
-        .setMinValue(25) // Updated to 25
+        .setMinValue(50) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -80,9 +80,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (25-500)")
+        .setDescription("Gold to bet (50-500)")
         .setRequired(true)
-        .setMinValue(25) // Updated to 25
+        .setMinValue(50) // Updated to 25
         .setMaxValue(500),
     ),
 
@@ -92,10 +92,10 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-200)")
+        .setDescription("Gold to bet (50-300)")
         .setRequired(true)
         .setMinValue(50) // Updated to 25
-        .setMaxValue(200),
+        .setMaxValue(300),
     ),
 
   new SlashCommandBuilder()
@@ -108,9 +108,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-200)")
+        .setDescription("Gold to bet (100-200)")
         .setRequired(true)
-        .setMinValue(50) // Updated to 25
+        .setMinValue(100) // Updated to 25
         .setMaxValue(200),
     ),
 
@@ -216,9 +216,9 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (25-500)")
+        .setDescription("Gold to bet (100-500)")
         .setRequired(true)
-        .setMinValue(50) // Updated to 25
+        .setMinValue(100) // Updated to 25
         .setMaxValue(500),
     )
     .addStringOption((opt) =>
