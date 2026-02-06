@@ -197,6 +197,17 @@ const commands = [
         .setMaxValue(300),
     ),
   new SlashCommandBuilder()
+    .setName("scratch")
+    .setDescription("Buy a 5x5 scratch card and find the jackpot!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-300)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(300),
+    ),
+  new SlashCommandBuilder()
     .setName("help")
     .setDescription("View the casino guide and game payouts"),
 
