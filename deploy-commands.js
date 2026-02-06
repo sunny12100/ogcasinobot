@@ -92,10 +92,10 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-300)")
+        .setDescription("Gold to bet (50-200)")
         .setRequired(true)
         .setMinValue(50) // Updated to 25
-        .setMaxValue(300),
+        .setMaxValue(200),
     ),
 
   new SlashCommandBuilder()
@@ -185,7 +185,17 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
-
+  new SlashCommandBuilder()
+    .setName("poker")
+    .setDescription("Play Texas Hold'em against the House bot!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (50-300)")
+        .setRequired(true)
+        .setMinValue(50)
+        .setMaxValue(300),
+    ),
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("View the casino guide and game payouts"),
