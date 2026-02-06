@@ -10,9 +10,8 @@ const { logToAudit } = require("../utils/logger");
 
 const activeScratch = new Map();
 const SESSION_EXPIRY = 45000;
-const COST = 100;
 
-// GLOBAL CLEANUP: Runs every 30s instead of every command to keep execution O(1)
+// GLOBAL CLEANUP: Runs every 30s
 setInterval(() => {
   const now = Date.now();
   for (const [id, ts] of activeScratch) {
@@ -23,7 +22,8 @@ setInterval(() => {
 module.exports = {
   name: "scratch",
   async execute(interaction) {
-    const { user, client } = interaction;
+    const { user, client, options } = interaction;
+    const amount = options.getInteger("amount"); // Dynamic bet amount
 
     // 1. ATOMIC LOCK
     if (activeScratch.has(user.id)) {
@@ -39,14 +39,16 @@ module.exports = {
     let deductedUser;
     try {
       deductedUser = await User.findOneAndUpdate(
-        { userId: user.id, gold: { $gte: COST } },
-        { $inc: { gold: -COST } },
+        { userId: user.id, gold: { $gte: amount } },
+        { $inc: { gold: -amount } },
         { new: true },
       );
 
       if (!deductedUser) {
         activeScratch.delete(user.id);
-        return interaction.editReply("❌ You don't have enough gold!");
+        return interaction.editReply(
+          `❌ You don't have enough gold! (Need ${amount})`,
+        );
       }
     } catch (err) {
       console.error("Deduction Error:", err);
@@ -54,13 +56,16 @@ module.exports = {
       return interaction.editReply("❌ Database error. Try again.");
     }
 
-    const getGrid = (revealedPos = null, emoji = null, nearMissPos = null) => {
+    const getGrid = (revealedPos = null, emoji = null, nearMisses = []) => {
       const rows = [];
       for (let i = 0; i < 5; i++) {
         const row = new ActionRowBuilder();
         for (let j = 0; j < 5; j++) {
           const btnId = `scr_${i}_${j}`;
           const btn = new ButtonBuilder().setCustomId(btnId);
+
+          const miss = nearMisses.find((m) => m.pos === btnId);
+
           if (revealedPos === btnId) {
             btn
               .setLabel(emoji)
@@ -68,9 +73,9 @@ module.exports = {
                 emoji === "❌" ? ButtonStyle.Danger : ButtonStyle.Success,
               )
               .setDisabled(true);
-          } else if (nearMissPos === btnId) {
+          } else if (miss) {
             btn
-              .setLabel("🏆")
+              .setLabel(miss.icon)
               .setStyle(ButtonStyle.Secondary)
               .setDisabled(true);
           } else {
@@ -90,14 +95,14 @@ module.exports = {
       .setTitle("🎫 Super 25 Scratch-Off")
       .setColor(0xf1c40f)
       .setDescription(
-        `### Choose ONE tile to scratch!\n${"▬".repeat(22)}\n\` 🏆 Jackpot: 10x  |  🎫 Winner: 2x  |  ❌ Dud: 0x \``,
+        `### Choose ONE tile to scratch!\n${"▬".repeat(22)}\n\` 🏆 Jackpot: 10x  |  🎫 Winner: 2x  |  ❌ Loss: 0x \``,
       )
       .addFields({
         name: "💳 WALLET",
         value: `**${deductedUser.gold}** gold`,
         inline: true,
       })
-      .setFooter({ text: `80% RTP | Cost: ${COST}` });
+      .setFooter({ text: `Card Value: ${amount} Gold` });
 
     const msg = await interaction.editReply({
       embeds: [embed],
@@ -114,15 +119,15 @@ module.exports = {
         return i.reply({ content: "Not your card!", ephemeral: true });
 
       collector.stop("scratched");
-      let settled = false; // Transaction guard flag
+      let settled = false;
 
       try {
-        // MATH ENGINE
         const rng = Math.random() * 100;
         let mult = 0,
           emoji = "❌",
           status = "BETTER LUCK NEXT TIME",
           color = 0xe74c3c;
+
         if (rng < 2) {
           mult = 10;
           emoji = "🏆";
@@ -136,52 +141,57 @@ module.exports = {
         }
 
         const [r, c] = i.customId.split("_").slice(1).map(Number);
-        let nearMissPos = null;
-        if (mult < 10) {
-          const offsets = [
-            [0, 1],
-            [0, -1],
-            [1, 0],
-            [-1, 0],
-            [1, 1],
-            [1, -1],
-            [-1, 1],
-            [-1, -1],
-          ];
-          const validOffsets = offsets.filter(
-            ([dr, dc]) =>
-              r + dr >= 0 && r + dr < 5 && c + dc >= 0 && c + dc < 5,
-          );
-          if (validOffsets.length > 0) {
-            const [dr, dc] =
-              validOffsets[Math.floor(Math.random() * validOffsets.length)];
-            nearMissPos = `scr_${r + dr}_${c + dc}`;
-          }
+
+        // --- MULTI-NEAR-MISS LOGIC ---
+        const nearMisses = [];
+        const offsets = [
+          [0, 1],
+          [0, -1],
+          [1, 0],
+          [-1, 0],
+          [1, 1],
+          [1, -1],
+          [-1, 1],
+          [-1, -1],
+        ];
+        const validOffsets = offsets
+          .map(([dr, dc]) => ({ r: r + dr, c: c + dc }))
+          .filter((pos) => pos.r >= 0 && pos.r < 5 && pos.c >= 0 && pos.c < 5)
+          .sort(() => Math.random() - 0.5); // Shuffle offsets
+
+        // Add 10x Tease (if not won)
+        if (mult < 10 && validOffsets.length > 0) {
+          const p = validOffsets.pop();
+          nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
+        }
+        // Add 2x Tease (if lost)
+        if (mult < 2 && validOffsets.length > 0) {
+          const p = validOffsets.pop();
+          nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
         }
 
-        const payout = COST * mult;
-        const net = payout - COST;
+        const payout = amount * mult;
+        const net = payout - amount;
 
-        // MONEY LOGIC: Settlement
+        // SETTLEMENT
         const finalUser = await User.findOneAndUpdate(
           { userId: user.id },
           { $inc: { gold: payout } },
           { new: true },
         );
-        settled = true; // Mark transaction as successful
+        settled = true;
 
-        // UI LOGIC: Decoupled from Settlement
         const resultEmbed = new EmbedBuilder()
           .setTitle(`🎫 Result: ${status}`)
           .setColor(color)
           .addFields(
             {
               name: "💰 SETTLEMENT",
-              value: `\`\`\`diff\n- Cost:   ${COST}\n+ Payout: ${payout}\n${net >= 0 ? "+" : "-"} Profit: ${net}\n\`\`\``,
+              value: `\`\`\`diff\n- Bet:    ${amount}\n+ Payout: ${payout}\n${net >= 0 ? "+" : "-"} Profit: ${net}\n\`\`\``,
               inline: true,
             },
             {
-              name: "💳 NEW BALANCE",
+              name: "💳 BALANCE",
               value: `**${finalUser.gold}** gold`,
               inline: true,
             },
@@ -190,15 +200,15 @@ module.exports = {
         try {
           await i.update({
             embeds: [resultEmbed],
-            components: getGrid(i.customId, emoji, nearMissPos),
+            components: getGrid(i.customId, emoji, nearMisses),
           });
         } catch (uiErr) {
-          console.error("UI Update Failed (but money was settled):", uiErr);
+          console.error("UI Update Failed:", uiErr);
         }
 
         logToAudit(client, {
           userId: user.id,
-          bet: COST,
+          bet: amount,
           amount: net,
           oldBalance: deductedUser.gold,
           newBalance: finalUser.gold,
@@ -206,10 +216,8 @@ module.exports = {
         });
       } catch (err) {
         console.error("Scratch Processing Error:", err);
-
-        // Only refund if the DB update never finished
         if (!settled) {
-          await User.updateOne({ userId: user.id }, { $inc: { gold: COST } });
+          await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
           const errContent = "❌ Card failed. Your bet has been refunded.";
           if (i.deferred || i.replied)
             await i.followUp({ content: errContent, ephemeral: true });
@@ -228,11 +236,11 @@ module.exports = {
             .setTitle("⏱️ Card Expired")
             .setColor(0x34495e)
             .setDescription(
-              `The card was voided because you didn't scratch in time.\n**Cost: ${COST} gold**`,
+              `You didn't scratch in time. The card has been voided.\n**Loss: ${amount} gold**`,
             );
           await interaction.editReply({
             embeds: [timeoutEmbed],
-            components: getGrid(null, null, null),
+            components: getGrid(null, null, []),
           });
         } catch {}
       }
