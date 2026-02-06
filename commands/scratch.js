@@ -21,7 +21,6 @@ setInterval(() => {
 module.exports = {
   name: "scratch",
   async execute(interaction) {
-    // 1. DEFER IMMEDIATELY - This kills the "Interaction Error"
     await interaction.deferReply();
 
     const { user, client, options } = interaction;
@@ -137,29 +136,33 @@ module.exports = {
 
         const [r, c] = i.customId.split("_").slice(1).map(Number);
 
-        // --- FIXED REVEAL LOGIC: SHOWS 1 JACKPOT + 6 TICKETS ---
+        // ✅ FIXED SMART REVEAL LOGIC
         const nearMisses = [];
         const allSpots = [];
+
         for (let ri = 0; ri < 5; ri++) {
           for (let ci = 0; ci < 5; ci++) {
             if (ri !== r || ci !== c) allSpots.push({ r: ri, c: ci });
           }
         }
-        // Shuffle the whole grid
+
         allSpots.sort(() => Math.random() - 0.5);
 
-        // Add 10x Tease (if not won)
-        if (mult < 10) {
-          const p = allSpots.pop();
-          nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
-        }
-        // Add EXACTLY 6 2x Tickets
-        for (let k = 0; k < 6; k++) {
-          if (allSpots.length > 0) {
+        if (mult === 0) {
+          // Loss → tease jackpot + tickets
+          const jp = allSpots.pop();
+          nearMisses.push({ pos: `scr_${jp.r}_${jp.c}`, icon: "🏆" });
+
+          for (let k = 0; k < 6 && allSpots.length > 0; k++) {
             const p = allSpots.pop();
             nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
           }
+        } else if (mult === 2) {
+          // 2x win → only tease jackpot
+          const jp = allSpots.pop();
+          nearMisses.push({ pos: `scr_${jp.r}_${jp.c}`, icon: "🏆" });
         }
+        // 10x win → no extra reveals
 
         const payout = amount * mult;
         const net = payout - amount;
@@ -177,7 +180,9 @@ module.exports = {
           .addFields(
             {
               name: "💰 SETTLEMENT",
-              value: `\`\`\`diff\n- Bet: ${amount}\n+ Payout: ${payout}\n${net >= 0 ? "+" : "-"} Profit: ${net}\n\`\`\``,
+              value: `\`\`\`diff\n- Bet: ${amount}\n+ Payout: ${payout}\n${
+                net >= 0 ? "+" : "-"
+              } Profit: ${net}\n\`\`\``,
               inline: true,
             },
             {
@@ -187,7 +192,6 @@ module.exports = {
             },
           );
 
-        // Use i.update to replace the current message components
         await i.update({
           embeds: [resultEmbed],
           components: getGrid(i.customId, emoji, nearMisses),
@@ -218,7 +222,6 @@ module.exports = {
     collector.on("end", async (collected, reason) => {
       if (reason === "time" && collected.size === 0) {
         activeScratch.delete(user.id);
-        // RETURN GOLD IF AFK
         await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
 
         try {
@@ -228,6 +231,7 @@ module.exports = {
             .setDescription(
               `You went AFK. Your **${amount} gold** has been returned.`,
             );
+
           await interaction.editReply({
             embeds: [timeoutEmbed],
             components: getGrid(null, null, []),
