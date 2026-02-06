@@ -266,7 +266,7 @@ module.exports = {
         );
       } else {
         embed.addFields({
-          name: "💳 CURRENT BALANCE",
+          name: " CURRENT BALANCE",
           value: `**${userData.gold - currentBet}** gold (Bet deducted)`,
           inline: false,
         });
