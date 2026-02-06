@@ -4,7 +4,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ComponentType,
-  SlashCommandBuilder,
 } = require("discord.js");
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
@@ -12,7 +11,6 @@ const { logToAudit } = require("../utils/logger");
 const activeScratch = new Map();
 const SESSION_EXPIRY = 45000;
 
-// GLOBAL CLEANUP: Keeps memory clean if cards are abandoned
 setInterval(() => {
   const now = Date.now();
   for (const [id, ts] of activeScratch) {
@@ -21,36 +19,21 @@ setInterval(() => {
 }, 30000);
 
 module.exports = {
-  data: new SlashCommandBuilder()
-    .setName("scratch")
-    .setDescription("Buy a 5x5 scratch card and find the jackpot!")
-    .addIntegerOption((opt) =>
-      opt
-        .setName("amount")
-        .setDescription("Gold to bet (25-500)")
-        .setRequired(true)
-        .setMinValue(25)
-        .setMaxValue(500),
-    ),
-
+  name: "scratch",
   async execute(interaction) {
-    // 1. DEFER IMMEDIATELY: Prevents "Interaction failed" errors from DB lag
+    // 1. DEFER IMMEDIATELY - This kills the "Interaction Error"
     await interaction.deferReply();
 
     const { user, client, options } = interaction;
     const amount = options.getInteger("amount");
 
-    // 2. ONE-BY-ONE LOCK: Prevents double-running
     if (activeScratch.has(user.id)) {
-      return interaction.editReply(
-        "❌ You already have an active card! Finish it first.",
-      );
+      return interaction.editReply("❌ Finish your current card first!");
     }
     activeScratch.set(user.id, Date.now());
 
     let deductedUser;
     try {
-      // ATOMIC TRANSACTION: Only deduct if they have enough gold
       deductedUser = await User.findOneAndUpdate(
         { userId: user.id, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -60,44 +43,37 @@ module.exports = {
       if (!deductedUser) {
         activeScratch.delete(user.id);
         return interaction.editReply(
-          `❌ Insufficient gold! You need ${amount}.`,
+          `❌ You don't have enough gold! (Need ${amount})`,
         );
       }
     } catch (err) {
       console.error("Deduction Error:", err);
       activeScratch.delete(user.id);
-      return interaction.editReply("❌ Database error. Please try again.");
+      return interaction.editReply("❌ Database error. Try again.");
     }
 
-    /**
-     * GRID GENERATOR
-     * Handles the visual state of the 5x5 board
-     */
-    const getGrid = (revealedPos = null, emoji = null, finalReveals = []) => {
+    const getGrid = (revealedPos = null, emoji = null, nearMisses = []) => {
       const rows = [];
       for (let i = 0; i < 5; i++) {
         const row = new ActionRowBuilder();
         for (let j = 0; j < 5; j++) {
           const btnId = `scr_${i}_${j}`;
           const btn = new ButtonBuilder().setCustomId(btnId);
-          const hiddenIcon = finalReveals.find((r) => r.pos === btnId);
+          const miss = nearMisses.find((m) => m.pos === btnId);
 
           if (revealedPos === btnId) {
-            // The tile the user actually clicked
             btn
               .setLabel(emoji)
               .setStyle(
                 emoji === "❌" ? ButtonStyle.Danger : ButtonStyle.Success,
               )
               .setDisabled(true);
-          } else if (hiddenIcon) {
-            // The "missed" winners revealed at the end
+          } else if (miss) {
             btn
-              .setLabel(hiddenIcon.icon)
+              .setLabel(miss.icon)
               .setStyle(ButtonStyle.Secondary)
               .setDisabled(true);
           } else {
-            // Standard unscratched tile
             btn
               .setLabel("?")
               .setStyle(ButtonStyle.Secondary)
@@ -141,7 +117,6 @@ module.exports = {
       let settled = false;
 
       try {
-        // PROBABILITY ENGINE
         const rng = Math.random() * 100;
         let mult = 0,
           emoji = "❌",
@@ -149,13 +124,11 @@ module.exports = {
           color = 0xe74c3c;
 
         if (rng < 2) {
-          // 2% Jackpot
           mult = 10;
           emoji = "🏆";
           status = "💰 MEGA JACKPOT!";
           color = 0x2ecc71;
         } else if (rng < 32) {
-          // 30% Winner
           mult = 2;
           emoji = "🎫";
           status = "✅ WINNER!";
@@ -164,35 +137,33 @@ module.exports = {
 
         const [r, c] = i.customId.split("_").slice(1).map(Number);
 
-        // --- DYNAMIC REVEAL LOGIC ---
-        const finalReveals = [];
+        // --- FIXED REVEAL LOGIC: SHOWS 1 JACKPOT + 6 TICKETS ---
+        const nearMisses = [];
         const allSpots = [];
         for (let ri = 0; ri < 5; ri++) {
           for (let ci = 0; ci < 5; ci++) {
             if (ri !== r || ci !== c) allSpots.push({ r: ri, c: ci });
           }
         }
+        // Shuffle the whole grid
         allSpots.sort(() => Math.random() - 0.5);
 
-        // Always show the 10x Jackpot trophy if the player didn't win it
+        // Add 10x Tease (if not won)
         if (mult < 10) {
           const p = allSpots.pop();
-          finalReveals.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
+          nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
         }
-
-        // Always ensure exactly 6 Ticket icons are visible on the board total
-        const ticketsToReveal = mult === 2 ? 5 : 6;
-        for (let k = 0; k < ticketsToReveal; k++) {
+        // Add EXACTLY 6 2x Tickets
+        for (let k = 0; k < 6; k++) {
           if (allSpots.length > 0) {
             const p = allSpots.pop();
-            finalReveals.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
+            nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
           }
         }
 
         const payout = amount * mult;
         const net = payout - amount;
 
-        // DB SETTLEMENT
         const finalUser = await User.findOneAndUpdate(
           { userId: user.id },
           { $inc: { gold: payout } },
@@ -216,10 +187,10 @@ module.exports = {
             },
           );
 
-        // Update the existing message with results
+        // Use i.update to replace the current message components
         await i.update({
           embeds: [resultEmbed],
-          components: getGrid(i.customId, emoji, finalReveals),
+          components: getGrid(i.customId, emoji, nearMisses),
         });
 
         logToAudit(client, {
@@ -231,12 +202,11 @@ module.exports = {
           reason: `Scratch: ${mult}x`,
         });
       } catch (err) {
-        console.error("Game Error:", err);
+        console.error("Scratch Processing Error:", err);
         if (!settled) {
-          // Emergency refund if crash happened before payout
           await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
           await interaction.followUp({
-            content: "❌ Error occurred. Bet refunded.",
+            content: "❌ Error occurred. Refunded.",
             ephemeral: true,
           });
         }
@@ -248,24 +218,21 @@ module.exports = {
     collector.on("end", async (collected, reason) => {
       if (reason === "time" && collected.size === 0) {
         activeScratch.delete(user.id);
-        try {
-          // AFK REFUND LOGIC
-          await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
+        // RETURN GOLD IF AFK
+        await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
 
+        try {
           const timeoutEmbed = new EmbedBuilder()
             .setTitle("⏱️ Card Expired")
             .setColor(0x34495e)
             .setDescription(
-              `You went AFK. Your **${amount} gold** has been returned to your wallet.`,
+              `You went AFK. Your **${amount} gold** has been returned.`,
             );
-
           await interaction.editReply({
             embeds: [timeoutEmbed],
             components: getGrid(null, null, []),
           });
-        } catch (e) {
-          console.error("AFK Refund Error:", e);
-        }
+        } catch {}
       }
     });
   },
