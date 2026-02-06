@@ -11,11 +11,10 @@ const { logToAudit } = require("../utils/logger");
 const activePoker = new Set();
 const MAX_BET = 500;
 
-/* -------------------- PERSISTENT DECK -------------------- */
-let globalPokerDeck = [];
-
-const shuffleShoe = () => {
-  const suits = ["♠️", "❤️", "♣️", "♦️"];
+/* -------------------- UTILS -------------------- */
+const getFisherYatesDeck = () => {
+  const suits = ["S", "H", "C", "D"];
+  const suitEmojis = { S: "♠️", H: "❤️", C: "♣️", D: "♦️" };
   const values = [
     "2",
     "3",
@@ -31,158 +30,215 @@ const shuffleShoe = () => {
     "K",
     "A",
   ];
-  let newDeck = [];
-  // Standard 52-card deck
+  let deck = [];
   for (const s of suits) {
-    for (const v of values) newDeck.push(`${v}${s}`);
+    for (const v of values)
+      deck.push({ id: `${v}${suitEmojis[s]}`, val: v, suit: s });
   }
-  newDeck.sort(() => Math.random() - 0.5);
-  globalPokerDeck = newDeck;
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
 };
 
-// Initial shuffle
-shuffleShoe();
+/* -------------------- TIE-BREAKER SCORING (BASE 15) -------------------- */
+// This encodes 5 cards into a unique number.
+// Rank 1 is highest card, Rank 5 is lowest.
+const getKickerScore = (ranks) => {
+  return ranks
+    .slice(0, 5)
+    .reduce((acc, rank, i) => acc + rank * Math.pow(15, 4 - i), 0);
+};
 
-/* -------------------- HAND EVALUATOR (FIXED) -------------------- */
-const evaluateHand = (hand, community) => {
-  const allCards = [...hand, ...community];
+/* -------------------- THE FINAL EVALUATOR -------------------- */
+const evaluateHand = (cards) => {
   const order = "23456789TJQKA";
-
-  const cardObjects = allCards
-    .map((c) => ({
-      val: c.slice(0, -2),
-      suit: c.slice(-2),
-      rank: order.indexOf(c.slice(0, -2)),
-    }))
+  const sorted = cards
+    .map((c) => ({ ...c, rank: order.indexOf(c.val) }))
     .sort((a, b) => b.rank - a.rank);
 
-  const counts = {};
-  cardObjects.forEach((c) => (counts[c.val] = (counts[c.val] || 0) + 1));
-  const countValues = Object.values(counts);
+  // 1. Check Flush & Straight Flush
+  const suits = { S: [], H: [], C: [], D: [] };
+  sorted.forEach((c) => suits[c.suit].push(c));
 
-  // Correct Flush Check
-  const suitsInHand = cardObjects.map((c) => c.suit);
-  const isFlush = ["♠️", "❤️", "♣️", "♦️"].some(
-    (s) => suitsInHand.filter((suit) => suit === s).length >= 5,
-  );
+  let flushResult = null;
+  for (const s in suits) {
+    if (suits[s].length >= 5) {
+      const flushCards = suits[s].sort((a, b) => b.rank - a.rank);
+      const sFlushHigh = getStraightHigh(flushCards);
+      if (sFlushHigh !== -1)
+        return { score: 8000000 + sFlushHigh, label: "Straight Flush" };
 
-  // Correct Straight Check (Including Ace-Low Wheel)
-  let uniqueRanks = [...new Set(cardObjects.map((c) => c.rank))].sort(
-    (a, b) => b - a,
-  );
-  let straightHigh = -1;
-
-  for (let i = 0; i <= uniqueRanks.length - 5; i++) {
-    if (uniqueRanks[i] - uniqueRanks[i + 4] === 4) {
-      straightHigh = uniqueRanks[i];
-      break;
+      // Compare multiple flushes (rare) or save best flush kickers
+      const currentFlushScore =
+        5000000 + getKickerScore(flushCards.map((c) => c.rank));
+      if (!flushResult || currentFlushScore > flushResult.score) {
+        flushResult = { score: currentFlushScore, label: "Flush" };
+      }
     }
   }
-  // FIX: Ace-2-3-4-5 Straight
-  if (
-    straightHigh === -1 &&
-    [12, 0, 1, 2, 3].every((r) => uniqueRanks.includes(r))
-  ) {
-    straightHigh = 3;
+
+  const counts = {};
+  sorted.forEach((c) => (counts[c.val] = (counts[c.val] || 0) + 1));
+  const countArr = Object.entries(counts)
+    .map(([v, count]) => ({ val: v, count, rank: order.indexOf(v) }))
+    .sort((a, b) =>
+      b.count !== a.count ? b.count - a.count : b.rank - a.rank,
+    );
+
+  // 2. Four of a Kind + Kicker
+  if (countArr[0].count === 4) {
+    const kicker = sorted.find((c) => c.val !== countArr[0].val).rank;
+    return {
+      score: 7000000 + countArr[0].rank * 15 + kicker,
+      label: "Four of a Kind",
+    };
   }
 
-  /* --- Hierarchy --- */
-  if (straightHigh !== -1 && isFlush)
-    return { score: 8000 + straightHigh, label: "Straight Flush" };
-  if (countValues.includes(4)) return { score: 7000, label: "Four of a Kind" };
-  if (countValues.includes(3) && countValues.includes(2))
-    return { score: 6000, label: "Full House" };
-  if (isFlush) return { score: 5000, label: "Flush" };
-  if (straightHigh !== -1)
-    return { score: 4000 + straightHigh, label: "Straight" };
-  if (countValues.includes(3)) return { score: 3000, label: "Three of a Kind" };
-  if (countValues.filter((v) => v === 2).length >= 2)
-    return { score: 2000, label: "Two Pair" };
-  if (countValues.includes(2)) return { score: 1000, label: "Pair" };
-  return { score: cardObjects[0].rank, label: "High Card" };
+  // 3. Full House (Rank of Triple + Rank of Pair)
+  if (countArr[0].count === 3 && countArr[1].count >= 2) {
+    return {
+      score: 6000000 + countArr[0].rank * 15 + countArr[1].rank,
+      label: "Full House",
+    };
+  }
+
+  // 4. Flush (If found earlier)
+  if (flushResult) return flushResult;
+
+  // 5. Straight
+  const sHigh = getStraightHigh(sorted);
+  if (sHigh !== -1) return { score: 4000000 + sHigh, label: "Straight" };
+
+  // 6. Three of a Kind + 2 Kickers
+  if (countArr[0].count === 3) {
+    const kickers = sorted
+      .filter((c) => c.val !== countArr[0].val)
+      .map((c) => c.rank);
+    return {
+      score:
+        3000000 + countArr[0].rank * 225 + getKickerScore(kickers.slice(0, 2)),
+      label: "Three of a Kind",
+    };
+  }
+
+  // 7. Two Pair + 1 Kicker
+  if (countArr[0].count === 2 && countArr[1].count === 2) {
+    const kicker = sorted.find(
+      (c) => c.val !== countArr[0].val && c.val !== countArr[1].val,
+    ).rank;
+    return {
+      score: 2000000 + countArr[0].rank * 225 + countArr[1].rank * 15 + kicker,
+      label: "Two Pair",
+    };
+  }
+
+  // 8. Pair + 3 Kickers
+  if (countArr[0].count === 2) {
+    const kickers = sorted
+      .filter((c) => c.val !== countArr[0].val)
+      .map((c) => c.rank);
+    return {
+      score:
+        1000000 +
+        countArr[0].rank * Math.pow(15, 3) +
+        getKickerScore(kickers.slice(0, 3)),
+      label: "Pair",
+    };
+  }
+
+  // 9. High Card (All 5 cards encoded)
+  return {
+    score: getKickerScore(sorted.map((c) => c.rank)),
+    label: "High Card",
+  };
+};
+
+const getStraightHigh = (cards) => {
+  const uniqueRanks = [...new Set(cards.map((c) => c.rank))].sort(
+    (a, b) => b - a,
+  );
+  for (let i = 0; i <= uniqueRanks.length - 5; i++) {
+    if (uniqueRanks[i] - uniqueRanks[i + 4] === 4) return uniqueRanks[i];
+  }
+  if ([12, 0, 1, 2, 3].every((r) => uniqueRanks.includes(r))) return 3;
+  return -1;
 };
 
 /* -------------------- COMMAND -------------------- */
 module.exports = {
   name: "poker",
   async execute(interaction) {
-    const userId = interaction.user.id;
-    const currentBet = interaction.options.getInteger("amount");
+    const { user, options, client } = interaction;
+    const currentBet = options.getInteger("amount");
 
-    // Increased buffer to 20 to ensure enough cards for a full hand + rigging draws
-    if (globalPokerDeck.length < 20) shuffleShoe();
-
-    if (currentBet > MAX_BET) {
+    if (!currentBet || currentBet < 25 || currentBet > MAX_BET) {
       return interaction.reply({
-        content: `❌ Max bet is ${MAX_BET}!`,
+        content: `❌ Bet must be between 25 and ${MAX_BET} gold!`,
         ephemeral: true,
       });
     }
-    if (activePoker.has(userId)) {
+
+    if (activePoker.has(user.id))
       return interaction.reply({
-        content: "❌ Finish your current game!",
+        content: "❌ You have an active game!",
         ephemeral: true,
       });
-    }
 
     await interaction.deferReply();
-    const userData = await User.findOne({ userId });
-    if (!userData || userData.gold < currentBet) {
+    const userData = await User.findOne({ userId: user.id });
+    if (!userData || userData.gold < currentBet)
       return interaction.editReply("❌ Not enough gold!");
-    }
 
-    activePoker.add(userId);
-    const initialBalance = userData.gold;
-    await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
+    activePoker.add(user.id);
+    await User.updateOne({ userId: user.id }, { $inc: { gold: -currentBet } });
 
-    let playerHand = [globalPokerDeck.pop(), globalPokerDeck.pop()];
-    let botHand = [globalPokerDeck.pop(), globalPokerDeck.pop()];
-    let community = [
-      globalPokerDeck.pop(),
-      globalPokerDeck.pop(),
-      globalPokerDeck.pop(),
-    ];
+    const deck = getFisherYatesDeck();
+    let playerHand = [deck.pop(), deck.pop()];
+    let botHand = [deck.pop(), deck.pop()];
+    let community = [deck.pop(), deck.pop(), deck.pop()];
 
     const createEmbed = (status, showBot = false, color = 0x5865f2) => {
       return new EmbedBuilder()
-        .setTitle("🃏 Texas Hold'em vs Bot")
+        .setTitle("🃏 Texas Hold'em vs House")
         .setColor(color)
-        .setDescription(`**GAME STATUS**\n> ${status}\n${"▬".repeat(25)}`)
+        .setDescription(`**STATUS**\n> ${status}`)
         .addFields(
           {
             name: "👤 YOUR HAND",
-            value: `**${playerHand.join(" ")}**`,
+            value: playerHand.map((c) => c.id).join(" "),
             inline: true,
           },
           {
             name: "🤖 BOT HAND",
-            value: showBot ? `**${botHand.join(" ")}**` : "❓ ❓",
+            value: showBot ? botHand.map((c) => c.id).join(" ") : "❓ ❓",
             inline: true,
           },
           {
-            name: "🎴 COMMUNITY BOARD",
-            value: community.join(" "),
+            name: "🎴 BOARD",
+            value: community.map((c) => c.id).join(" "),
             inline: false,
           },
         )
         .setFooter({
-          text: `💰 Pot: ${currentBet * 2} | Shoe: ${globalPokerDeck.length} cards left`,
+          text: `💰 Pot: ${currentBet * 2} | Player: ${user.username}`,
         });
     };
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId("call")
+        .setCustomId("p_call")
         .setLabel("Call")
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId("fold")
+        .setCustomId("p_fold")
         .setLabel("Fold")
         .setStyle(ButtonStyle.Danger),
     );
 
     const msg = await interaction.editReply({
-      embeds: [createEmbed("The Flop is out. Will you Call or Fold?")],
+      embeds: [createEmbed("Call to see Turn & River.")],
       components: [row],
     });
 
@@ -192,111 +248,79 @@ module.exports = {
     });
 
     collector.on("collect", async (i) => {
-      if (i.user.id !== userId)
+      if (i.user.id !== user.id)
         return i.reply({ content: "Not your game!", ephemeral: true });
 
-      if (i.customId === "fold") {
-        collector.stop("folded");
+      collector.stop("processed");
+
+      if (i.customId === "p_fold") {
+        activePoker.delete(user.id);
         return i.update({
-          embeds: [
-            createEmbed("🏳️ You folded. Bot takes the pot.", true, 0xe74c3c),
-          ],
+          embeds: [createEmbed("🏳️ You folded. House wins.", true, 0xe74c3c)],
           components: [],
         });
       }
 
-      /* --- THE CALL / SHOWDOWN WITH RIGGING --- */
-      // 1. Deal Turn
-      community.push(globalPokerDeck.pop());
+      community.push(deck.pop()); // Turn
+      community.push(deck.pop()); // River
 
-      // 2. Determine if we should rig the River (40% chance if player is winning)
-      const currentP = evaluateHand(playerHand, community);
-      const currentB = evaluateHand(botHand, community);
-
-      let riverCard;
-      if (currentP.score > currentB.score && Math.random() < 0.4) {
-        // Find a card in the remaining deck that gives the bot a better score than the player
-        const saviorCardIndex = globalPokerDeck.findIndex((card) => {
-          const testCommunity = [...community, card];
-          return (
-            evaluateHand(botHand, testCommunity).score >
-            evaluateHand(playerHand, testCommunity).score
-          );
-        });
-
-        if (saviorCardIndex !== -1) {
-          riverCard = globalPokerDeck.splice(saviorCardIndex, 1)[0];
-        } else {
-          riverCard = globalPokerDeck.pop();
-        }
-      } else {
-        riverCard = globalPokerDeck.pop();
-      }
-
-      community.push(riverCard);
-
-      const pRes = evaluateHand(playerHand, community);
-      const bRes = evaluateHand(botHand, community);
+      const pRes = evaluateHand([...playerHand, ...community]);
+      const bRes = evaluateHand([...botHand, ...community]);
 
       const playerWins = pRes.score > bRes.score;
       const isPush = pRes.score === bRes.score;
       const payout = playerWins ? currentBet * 2 : isPush ? currentBet : 0;
 
       const finalUser = await User.findOneAndUpdate(
-        { userId },
+        { userId: user.id },
         { $inc: { gold: payout } },
         { new: true },
       );
+      activePoker.delete(user.id);
 
-      const resultText = playerWins
-        ? `✅ **YOU WIN!**\nYour Hand: **${pRes.label}**\nBot Hand: ${bRes.label}`
+      const resultLabel = playerWins
+        ? `✅ **WIN** (${pRes.label})`
         : isPush
-          ? `🤝 **PUSH**\nBoth had: ${pRes.label}`
-          : `❌ **BOT WINS**\nBot Hand: **${bRes.label}**\nYour Hand: ${pRes.label}`;
+          ? `🤝 **PUSH**`
+          : `❌ **LOSS** (Bot: ${bRes.label})`;
 
       await i.update({
         embeds: [
-          createEmbed(resultText, true, playerWins ? 0x2ecc71 : 0xe74c3c),
+          createEmbed(
+            resultLabel,
+            true,
+            playerWins ? 0x2ecc71 : isPush ? 0xf1c40f : 0xe74c3c,
+          ),
         ],
         components: [],
       });
 
-      logToAudit(interaction.client, {
-        userId,
+      logToAudit(client, {
+        userId: user.id,
         bet: currentBet,
         amount: payout - currentBet,
-        oldBalance: initialBalance,
+        oldBalance: userData.gold,
         newBalance: finalUser.gold,
-        reason: `Poker Showdown: ${pRes.label} vs ${bRes.label}`,
-      }).catch(() => null);
-
-      collector.stop("ended");
+        reason: `Poker: ${pRes.label} vs ${bRes.label}`,
+      });
     });
 
     collector.on("end", async (_, reason) => {
-      activePoker.delete(userId);
       if (reason === "time") {
-        await interaction
-          .editReply({
-            embeds: [
-              createEmbed(
-                "⏱️ **AFK - Auto Folded**\nYou took too long to act.",
-                true,
-                0x34495e,
-              ),
-            ],
-            components: [],
-          })
-          .catch(() => null);
-
-        logToAudit(interaction.client, {
-          userId,
+        activePoker.delete(user.id);
+        const finalData = await User.findOne({ userId: user.id });
+        await interaction.editReply({
+          embeds: [createEmbed("⏱️ **AFK - Folded**", true, 0x34495e)],
+          components: [],
+        });
+        logToAudit(client, {
+          userId: user.id,
           bet: currentBet,
           amount: -currentBet,
-          oldBalance: initialBalance,
-          newBalance: initialBalance - currentBet,
-          reason: "Poker Result: AFK Fold",
-        }).catch(() => null);
+          oldBalance: userData.gold,
+          newBalance: finalData.gold,
+          reason: "Poker: AFK Timeout",
+        });
       }
     });
   },
