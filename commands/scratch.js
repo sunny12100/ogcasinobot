@@ -12,7 +12,6 @@ const { logToAudit } = require("../utils/logger");
 const activeScratch = new Map();
 const SESSION_EXPIRY = 45000;
 
-// GLOBAL CLEANUP
 setInterval(() => {
   const now = Date.now();
   for (const [id, ts] of activeScratch) {
@@ -34,19 +33,19 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // 1. DEFER IMMEDIATELY (Prevents "Application did not respond")
+    await interaction.deferReply();
+
     const { user, client, options } = interaction;
     const amount = options.getInteger("amount");
 
-    // 1. STRICT COMMAND LOCK (One by one)
+    // 2. STRICT COMMAND LOCK
     if (activeScratch.has(user.id)) {
-      return interaction.reply({
-        content: "❌ You already have an active card! Finish it first.",
-        ephemeral: true,
-      });
+      return interaction.editReply(
+        "❌ You already have an active card! Finish it first.",
+      );
     }
     activeScratch.set(user.id, Date.now());
-
-    await interaction.deferReply();
 
     let deductedUser;
     try {
@@ -68,7 +67,6 @@ module.exports = {
       return interaction.editReply("❌ Database error. Please try again.");
     }
 
-    // Updated Grid to show ALL hidden winners at the end
     const getGrid = (revealedPos = null, emoji = null, allWinners = []) => {
       const rows = [];
       for (let i = 0; i < 5; i++) {
@@ -86,7 +84,6 @@ module.exports = {
               )
               .setDisabled(true);
           } else if (winner) {
-            // Reveal the tickets the player DIDN'T click
             btn
               .setLabel(winner.icon)
               .setStyle(ButtonStyle.Secondary)
@@ -155,8 +152,7 @@ module.exports = {
 
         const [r, c] = i.customId.split("_").slice(1).map(Number);
 
-        // --- FULL BOARD REVEAL LOGIC ---
-        // We populate the grid with 1 Jackpot and 9 Winners total
+        // --- FULL BOARD REVEAL ---
         const allWinners = [];
         const allOtherPositions = [];
         for (let ri = 0; ri < 5; ri++) {
@@ -166,14 +162,11 @@ module.exports = {
         }
         allOtherPositions.sort(() => Math.random() - 0.5);
 
-        // Add hidden Jackpot if not clicked
         if (mult < 10) {
           const p = allOtherPositions.pop();
           allWinners.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
         }
-        // Fill board with 2x tickets (reveal the rest of the 9 total)
-        const ticketsToReveal = 9;
-        for (let j = 0; j < ticketsToReveal; j++) {
+        for (let j = 0; j < 9; j++) {
           if (allOtherPositions.length > 0) {
             const p = allOtherPositions.pop();
             allWinners.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
@@ -237,15 +230,13 @@ module.exports = {
       if (reason === "time" && collected.size === 0) {
         activeScratch.delete(user.id);
         try {
-          // 2. AFK REFUND LOGIC
+          // REFUND IF AFK
           await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
 
           const timeoutEmbed = new EmbedBuilder()
             .setTitle("⏱️ Card Expired")
             .setColor(0x34495e)
-            .setDescription(
-              `You went AFK. The card was closed and your **${amount} gold** has been refunded.`,
-            );
+            .setDescription(`You went AFK. Refunded **${amount} gold**.`);
 
           await interaction.editReply({
             embeds: [timeoutEmbed],
