@@ -11,7 +11,6 @@ const { logToAudit } = require("../utils/logger");
 const activeScratch = new Map();
 const SESSION_EXPIRY = 45000;
 
-// GLOBAL CLEANUP: Runs every 30s
 setInterval(() => {
   const now = Date.now();
   for (const [id, ts] of activeScratch) {
@@ -22,19 +21,16 @@ setInterval(() => {
 module.exports = {
   name: "scratch",
   async execute(interaction) {
-    const { user, client, options } = interaction;
-    const amount = options.getInteger("amount"); // Dynamic bet amount
+    // 1. DEFER IMMEDIATELY - This kills the "Interaction Error"
+    await interaction.deferReply();
 
-    // 1. ATOMIC LOCK
+    const { user, client, options } = interaction;
+    const amount = options.getInteger("amount");
+
     if (activeScratch.has(user.id)) {
-      return interaction.reply({
-        content: "❌ Finish your current card first!",
-        ephemeral: true,
-      });
+      return interaction.editReply("❌ Finish your current card first!");
     }
     activeScratch.set(user.id, Date.now());
-
-    await interaction.deferReply();
 
     let deductedUser;
     try {
@@ -63,7 +59,6 @@ module.exports = {
         for (let j = 0; j < 5; j++) {
           const btnId = `scr_${i}_${j}`;
           const btn = new ButtonBuilder().setCustomId(btnId);
-
           const miss = nearMisses.find((m) => m.pos === btnId);
 
           if (revealedPos === btnId) {
@@ -95,7 +90,7 @@ module.exports = {
       .setTitle("🎫 Super 25 Scratch-Off")
       .setColor(0xf1c40f)
       .setDescription(
-        `### Choose ONE tile to scratch!\n${"▬".repeat(22)}\n\` 🏆 Jackpot: 10x  |  🎫 Winner: 2x  |  ❌ Loss: 0x \``,
+        `### Choose ONE tile to scratch!\n${"▬".repeat(22)}\n\` 🏆 Jackpot: 10x | 🎫 Winner: 2x | ❌ Loss: 0x \``,
       )
       .addFields({
         name: "💳 WALLET",
@@ -142,38 +137,33 @@ module.exports = {
 
         const [r, c] = i.customId.split("_").slice(1).map(Number);
 
-        // --- MULTI-NEAR-MISS LOGIC ---
+        // --- FIXED REVEAL LOGIC: SHOWS 1 JACKPOT + 6 TICKETS ---
         const nearMisses = [];
-        const offsets = [
-          [0, 1],
-          [0, -1],
-          [1, 0],
-          [-1, 0],
-          [1, 1],
-          [1, -1],
-          [-1, 1],
-          [-1, -1],
-        ];
-        const validOffsets = offsets
-          .map(([dr, dc]) => ({ r: r + dr, c: c + dc }))
-          .filter((pos) => pos.r >= 0 && pos.r < 5 && pos.c >= 0 && pos.c < 5)
-          .sort(() => Math.random() - 0.5); // Shuffle offsets
+        const allSpots = [];
+        for (let ri = 0; ri < 5; ri++) {
+          for (let ci = 0; ci < 5; ci++) {
+            if (ri !== r || ci !== c) allSpots.push({ r: ri, c: ci });
+          }
+        }
+        // Shuffle the whole grid
+        allSpots.sort(() => Math.random() - 0.5);
 
         // Add 10x Tease (if not won)
-        if (mult < 10 && validOffsets.length > 0) {
-          const p = validOffsets.pop();
+        if (mult < 10) {
+          const p = allSpots.pop();
           nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
         }
-        // Add 2x Tease (if lost)
-        if (mult < 2 && validOffsets.length > 0) {
-          const p = validOffsets.pop();
-          nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
+        // Add EXACTLY 6 2x Tickets
+        for (let k = 0; k < 6; k++) {
+          if (allSpots.length > 0) {
+            const p = allSpots.pop();
+            nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
+          }
         }
 
         const payout = amount * mult;
         const net = payout - amount;
 
-        // SETTLEMENT
         const finalUser = await User.findOneAndUpdate(
           { userId: user.id },
           { $inc: { gold: payout } },
@@ -187,7 +177,7 @@ module.exports = {
           .addFields(
             {
               name: "💰 SETTLEMENT",
-              value: `\`\`\`diff\n- Bet:    ${amount}\n+ Payout: ${payout}\n${net >= 0 ? "+" : "-"} Profit: ${net}\n\`\`\``,
+              value: `\`\`\`diff\n- Bet: ${amount}\n+ Payout: ${payout}\n${net >= 0 ? "+" : "-"} Profit: ${net}\n\`\`\``,
               inline: true,
             },
             {
@@ -197,14 +187,11 @@ module.exports = {
             },
           );
 
-        try {
-          await i.update({
-            embeds: [resultEmbed],
-            components: getGrid(i.customId, emoji, nearMisses),
-          });
-        } catch (uiErr) {
-          console.error("UI Update Failed:", uiErr);
-        }
+        // Use i.update to replace the current message components
+        await i.update({
+          embeds: [resultEmbed],
+          components: getGrid(i.customId, emoji, nearMisses),
+        });
 
         logToAudit(client, {
           userId: user.id,
@@ -218,10 +205,10 @@ module.exports = {
         console.error("Scratch Processing Error:", err);
         if (!settled) {
           await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
-          const errContent = "❌ Card failed. Your bet has been refunded.";
-          if (i.deferred || i.replied)
-            await i.followUp({ content: errContent, ephemeral: true });
-          else await i.reply({ content: errContent, ephemeral: true });
+          await interaction.followUp({
+            content: "❌ Error occurred. Refunded.",
+            ephemeral: true,
+          });
         }
       } finally {
         activeScratch.delete(user.id);
@@ -231,12 +218,15 @@ module.exports = {
     collector.on("end", async (collected, reason) => {
       if (reason === "time" && collected.size === 0) {
         activeScratch.delete(user.id);
+        // RETURN GOLD IF AFK
+        await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
+
         try {
           const timeoutEmbed = new EmbedBuilder()
             .setTitle("⏱️ Card Expired")
             .setColor(0x34495e)
             .setDescription(
-              `You didn't scratch in time. The card has been voided.\n**Loss: ${amount} gold**`,
+              `You went AFK. Your **${amount} gold** has been returned.`,
             );
           await interaction.editReply({
             embeds: [timeoutEmbed],
