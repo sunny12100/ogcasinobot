@@ -32,7 +32,7 @@ const shuffleShoe = () => {
     "A",
   ];
   let newDeck = [];
-  // Standard single 52-card deck for Poker realism, reshuffled often
+  // Standard 52-card deck
   for (const s of suits) {
     for (const v of values) newDeck.push(`${v}${s}`);
   }
@@ -43,7 +43,7 @@ const shuffleShoe = () => {
 // Initial shuffle
 shuffleShoe();
 
-/* -------------------- HAND EVALUATOR -------------------- */
+/* -------------------- HAND EVALUATOR (FIXED) -------------------- */
 const evaluateHand = (hand, community) => {
   const allCards = [...hand, ...community];
   const order = "23456789TJQKA";
@@ -60,21 +60,33 @@ const evaluateHand = (hand, community) => {
   cardObjects.forEach((c) => (counts[c.val] = (counts[c.val] || 0) + 1));
   const countValues = Object.values(counts);
 
-  const isFlush = cardObjects.some(
-    (c) => cardObjects.filter((f) => f.suit === c.suit).length >= 5,
+  // Correct Flush Check
+  const suitsInHand = cardObjects.map((c) => c.suit);
+  const isFlush = ["♠️", "❤️", "♣️", "♦️"].some(
+    (s) => suitsInHand.filter((suit) => suit === s).length >= 5,
   );
 
+  // Correct Straight Check (Including Ace-Low Wheel)
   let uniqueRanks = [...new Set(cardObjects.map((c) => c.rank))].sort(
     (a, b) => b - a,
   );
   let straightHigh = -1;
+
   for (let i = 0; i <= uniqueRanks.length - 5; i++) {
     if (uniqueRanks[i] - uniqueRanks[i + 4] === 4) {
       straightHigh = uniqueRanks[i];
       break;
     }
   }
+  // FIX: Ace-2-3-4-5 Straight
+  if (
+    straightHigh === -1 &&
+    [12, 0, 1, 2, 3].every((r) => uniqueRanks.includes(r))
+  ) {
+    straightHigh = 3;
+  }
 
+  /* --- Hierarchy --- */
   if (straightHigh !== -1 && isFlush)
     return { score: 8000 + straightHigh, label: "Straight Flush" };
   if (countValues.includes(4)) return { score: 7000, label: "Four of a Kind" };
@@ -97,24 +109,27 @@ module.exports = {
     const userId = interaction.user.id;
     const currentBet = interaction.options.getInteger("amount");
 
-    // Check if deck needs reshuffle
-    if (globalPokerDeck.length < 15) shuffleShoe();
+    // Increased buffer to 20 to ensure enough cards for a full hand + rigging draws
+    if (globalPokerDeck.length < 20) shuffleShoe();
 
-    if (currentBet > MAX_BET)
+    if (currentBet > MAX_BET) {
       return interaction.reply({
         content: `❌ Max bet is ${MAX_BET}!`,
         ephemeral: true,
       });
-    if (activePoker.has(userId))
+    }
+    if (activePoker.has(userId)) {
       return interaction.reply({
         content: "❌ Finish your current game!",
         ephemeral: true,
       });
+    }
 
     await interaction.deferReply();
     const userData = await User.findOne({ userId });
-    if (!userData || userData.gold < currentBet)
+    if (!userData || userData.gold < currentBet) {
       return interaction.editReply("❌ Not enough gold!");
+    }
 
     activePoker.add(userId);
     const initialBalance = userData.gold;
@@ -134,10 +149,14 @@ module.exports = {
         .setColor(color)
         .setDescription(`**GAME STATUS**\n> ${status}\n${"▬".repeat(25)}`)
         .addFields(
-          { name: "👤 YOUR HAND", value: playerHand.join(" "), inline: true },
+          {
+            name: "👤 YOUR HAND",
+            value: `**${playerHand.join(" ")}**`,
+            inline: true,
+          },
           {
             name: "🤖 BOT HAND",
-            value: showBot ? botHand.join(" ") : "❓ ❓",
+            value: showBot ? `**${botHand.join(" ")}**` : "❓ ❓",
             inline: true,
           },
           {
@@ -147,7 +166,7 @@ module.exports = {
           },
         )
         .setFooter({
-          text: `💰 Pot: ${currentBet * 2} | Cards left in deck: ${globalPokerDeck.length}`,
+          text: `💰 Pot: ${currentBet * 2} | Shoe: ${globalPokerDeck.length} cards left`,
         });
     };
 
@@ -177,7 +196,6 @@ module.exports = {
         return i.reply({ content: "Not your game!", ephemeral: true });
 
       if (i.customId === "fold") {
-        activePoker.delete(userId);
         collector.stop("folded");
         return i.update({
           embeds: [
@@ -187,9 +205,35 @@ module.exports = {
         });
       }
 
-      // --- THE CALL / SHOWDOWN ---
-      community.push(globalPokerDeck.pop()); // Turn
-      community.push(globalPokerDeck.pop()); // River
+      /* --- THE CALL / SHOWDOWN WITH RIGGING --- */
+      // 1. Deal Turn
+      community.push(globalPokerDeck.pop());
+
+      // 2. Determine if we should rig the River (40% chance if player is winning)
+      const currentP = evaluateHand(playerHand, community);
+      const currentB = evaluateHand(botHand, community);
+
+      let riverCard;
+      if (currentP.score > currentB.score && Math.random() < 0.4) {
+        // Find a card in the remaining deck that gives the bot a better score than the player
+        const saviorCardIndex = globalPokerDeck.findIndex((card) => {
+          const testCommunity = [...community, card];
+          return (
+            evaluateHand(botHand, testCommunity).score >
+            evaluateHand(playerHand, testCommunity).score
+          );
+        });
+
+        if (saviorCardIndex !== -1) {
+          riverCard = globalPokerDeck.splice(saviorCardIndex, 1)[0];
+        } else {
+          riverCard = globalPokerDeck.pop();
+        }
+      } else {
+        riverCard = globalPokerDeck.pop();
+      }
+
+      community.push(riverCard);
 
       const pRes = evaluateHand(playerHand, community);
       const bRes = evaluateHand(botHand, community);
@@ -205,10 +249,10 @@ module.exports = {
       );
 
       const resultText = playerWins
-        ? `✅ **YOU WIN!**\nYour Hand: ${pRes.label}\nBot Hand: ${bRes.label}`
+        ? `✅ **YOU WIN!**\nYour Hand: **${pRes.label}**\nBot Hand: ${bRes.label}`
         : isPush
-          ? `🤝 **PUSH**`
-          : `❌ **BOT WINS**\nBot Hand: ${bRes.label}\nYour Hand: ${pRes.label}`;
+          ? `🤝 **PUSH**\nBoth had: ${pRes.label}`
+          : `❌ **BOT WINS**\nBot Hand: **${bRes.label}**\nYour Hand: ${pRes.label}`;
 
       await i.update({
         embeds: [
@@ -223,10 +267,9 @@ module.exports = {
         amount: payout - currentBet,
         oldBalance: initialBalance,
         newBalance: finalUser.gold,
-        reason: `Poker Result: ${pRes.label} vs ${bRes.label}`,
+        reason: `Poker Showdown: ${pRes.label} vs ${bRes.label}`,
       }).catch(() => null);
 
-      activePoker.delete(userId);
       collector.stop("ended");
     });
 
