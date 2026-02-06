@@ -13,15 +13,14 @@ const MAX_BET = 500;
 const SESSION_EXPIRY = 60000;
 
 /* -------------------- MATHEMATICAL SLOTS -------------------- */
-// Base 15 ensures no rank (0-12) can ever overflow into the next slot.
-const P5 = Math.pow(15, 5); // Hand Type Slot
-const P4 = Math.pow(15, 4); // Primary Rank Slot
-const P3 = Math.pow(15, 3); // Secondary Rank Slot
-const P2 = Math.pow(15, 2); // Kicker 1 Slot
-const P1 = Math.pow(15, 1); // Kicker 2 Slot
-const P0 = 1; // Kicker 3 Slot
+const P5 = Math.pow(15, 5);
+const P4 = Math.pow(15, 4);
+const P3 = Math.pow(15, 3);
+const P2 = Math.pow(15, 2);
+const P1 = Math.pow(15, 1);
+const P0 = 1;
 
-const getFisherYatesDeck = () => {
+const getShoe = (deckCount = 6) => {
   const suits = ["S", "H", "C", "D"];
   const suitEmojis = { S: "♠️", H: "❤️", C: "♣️", D: "♦️" };
   const values = [
@@ -39,20 +38,21 @@ const getFisherYatesDeck = () => {
     "K",
     "A",
   ];
-  let deck = [];
-  for (const s of suits) {
-    for (const v of values)
-      deck.push({ id: `${v}${suitEmojis[s]}`, val: v, suit: s });
+  let shoe = [];
+  for (let i = 0; i < deckCount; i++) {
+    for (const s of suits) {
+      for (const v of values)
+        shoe.push({ id: `**${v}${suitEmojis[s]}**`, val: v, suit: s });
+    }
   }
-  for (let i = deck.length - 1; i > 0; i--) {
+  for (let i = shoe.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
+    [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
   }
-  return deck;
+  return shoe;
 };
 
 const getKickerScore = (ranks) => {
-  // Encodes up to 5 cards into unique slots
   return (
     (ranks[0] || 0) * P4 +
     (ranks[1] || 0) * P3 +
@@ -62,14 +62,11 @@ const getKickerScore = (ranks) => {
   );
 };
 
-/* -------------------- THE FINAL EVALUATOR -------------------- */
 const evaluateHand = (cards) => {
   const order = "23456789TJQKA";
   const sorted = cards
     .map((c) => ({ ...c, rank: order.indexOf(c.val) }))
     .sort((a, b) => b.rank - a.rank);
-
-  // 1. Flush & Straight Flush (Tracking Best Flush)
   const suits = { S: [], H: [], C: [], D: [] };
   sorted.forEach((c) => suits[c.suit].push(c));
 
@@ -78,12 +75,11 @@ const evaluateHand = (cards) => {
     if (suits[s].length >= 5) {
       const flushCards = suits[s].sort((a, b) => b.rank - a.rank);
       const sFlushHigh = getStraightHigh(flushCards);
-
       if (sFlushHigh !== -1) {
         const sfScore = 8 * P5 + sFlushHigh * P4;
         if (!bestFlush || sfScore > bestFlush.score)
           bestFlush = { score: sfScore, label: "Straight Flush" };
-        if (sFlushHigh === 12) return bestFlush; // Royal Flush optimization
+        if (sFlushHigh === 12) return bestFlush;
       } else {
         const fScore = 5 * P5 + getKickerScore(flushCards.map((c) => c.rank));
         if (!bestFlush || fScore > bestFlush.score)
@@ -101,7 +97,6 @@ const evaluateHand = (cards) => {
       b.count !== a.count ? b.count - a.count : b.rank - a.rank,
     );
 
-  // 2. Four of a Kind
   if (countArr[0].count === 4) {
     const kicker = sorted.find((c) => c.val !== countArr[0].val).rank;
     return {
@@ -110,7 +105,6 @@ const evaluateHand = (cards) => {
     };
   }
 
-  // 3. Full House
   const triples = countArr.filter((c) => c.count >= 3);
   const pairsOrTrips = countArr.filter((c) => c.count >= 2);
   if (triples.length >= 1 && pairsOrTrips.length >= 2) {
@@ -126,11 +120,9 @@ const evaluateHand = (cards) => {
 
   if (bestFlush) return bestFlush;
 
-  // 4. Straight
   const sHigh = getStraightHigh(sorted);
   if (sHigh !== -1) return { score: 4 * P5 + sHigh * P4, label: "Straight" };
 
-  // 5. Three of a Kind
   if (countArr[0].count === 3) {
     const kickers = sorted
       .filter((c) => c.val !== countArr[0].val)
@@ -141,7 +133,6 @@ const evaluateHand = (cards) => {
     };
   }
 
-  // 6. Two Pair
   const pairs = countArr
     .filter((c) => c.count === 2)
     .sort((a, b) => b.rank - a.rank);
@@ -155,7 +146,6 @@ const evaluateHand = (cards) => {
     };
   }
 
-  // 7. Pair
   if (pairs.length === 1) {
     const kickers = sorted
       .filter((c) => c.val !== pairs[0].val)
@@ -190,23 +180,19 @@ module.exports = {
     const { user, options, client } = interaction;
     const currentBet = options.getInteger("amount");
 
-    // Cleanup stale sessions
     const now = Date.now();
     for (const [id, ts] of activePoker)
       if (now - ts > SESSION_EXPIRY) activePoker.delete(id);
 
     if (!currentBet || currentBet < 25 || currentBet > MAX_BET) {
       return interaction.reply({
-        content: `❌ Bet must be between 25 and ${MAX_BET} gold!`,
+        content: `❌ Bet between 25-${MAX_BET} gold!`,
         ephemeral: true,
       });
     }
 
     if (activePoker.has(user.id))
-      return interaction.reply({
-        content: "❌ Game in progress!",
-        ephemeral: true,
-      });
+      return interaction.reply({ content: "❌ Game active!", ephemeral: true });
 
     await interaction.deferReply();
     const userData = await User.findOne({ userId: user.id });
@@ -216,18 +202,16 @@ module.exports = {
     activePoker.set(user.id, now);
     await User.updateOne({ userId: user.id }, { $inc: { gold: -currentBet } });
 
-    const deck = getFisherYatesDeck();
-    let playerHand = [deck.pop()];
-    let botHand = [deck.pop()];
-    playerHand.push(deck.pop());
-    botHand.push(deck.pop());
+    const deck = getShoe(6);
+    let playerHand = [deck.pop(), deck.pop()];
+    let botHand = [deck.pop(), deck.pop()];
     let community = [deck.pop(), deck.pop(), deck.pop()];
 
-    const createEmbed = (status, showBot = false, color = 0x5865f2) => {
-      return new EmbedBuilder()
-        .setTitle("🃏 Casino Hold'em")
+    const createEmbed = (status, resultData = null, color = 0x5865f2) => {
+      const embed = new EmbedBuilder()
+        .setTitle("🃏 Casino Texas Hold'em")
         .setColor(color)
-        .setDescription(`**STATUS**\n> ${status}`)
+        .setDescription(`## ${status}\n${"▬".repeat(18)}`)
         .addFields(
           {
             name: "👤 YOUR HAND",
@@ -236,17 +220,28 @@ module.exports = {
           },
           {
             name: "🤖 BOT HAND",
-            value: showBot ? botHand.map((c) => c.id).join(" ") : "❓ ❓",
+            value: resultData ? botHand.map((c) => c.id).join(" ") : "❓ ❓",
             inline: true,
           },
           {
             name: "🎴 BOARD",
-            value:
-              community.length > 0
-                ? community.map((c) => c.id).join(" ")
-                : "...",
+            value: community.map((c) => c.id).join(" ") || "Preparing...",
+            inline: false,
           },
         );
+
+      if (resultData) {
+        embed.addFields({
+          name: "📊 FINAL SETTLEMENT",
+          value: `> **Result:** ${resultData.outcome}\n> **Net Change:** \`${resultData.net > 0 ? "+" : ""}${resultData.net}\` gold\n> **Hand:** ${resultData.hand}`,
+          inline: false,
+        });
+      }
+
+      embed.setFooter({
+        text: `💰 Bet: ${currentBet} | Shoe: ${deck.length} cards remaining`,
+      });
+      return embed;
     };
 
     const row = new ActionRowBuilder().addComponents(
@@ -261,7 +256,7 @@ module.exports = {
     );
 
     const msg = await interaction.editReply({
-      embeds: [createEmbed("The Flop is out. Choose to Call or Fold.")],
+      embeds: [createEmbed("The Flop is out. Will you Call or Fold?")],
       components: [row],
     });
     const collector = msg.createMessageComponentCollector({
@@ -277,13 +272,18 @@ module.exports = {
       if (i.customId === "p_fold") {
         activePoker.delete(user.id);
         return i.update({
-          embeds: [createEmbed("🏳️ You folded. House wins.", true, 0xe74c3c)],
+          embeds: [
+            createEmbed(
+              "🏳️ YOU FOLDED",
+              { outcome: "House Wins", net: -currentBet, hand: "N/A" },
+              0xe74c3c,
+            ),
+          ],
           components: [],
         });
       }
 
       community.push(deck.pop(), deck.pop());
-
       const pRes = evaluateHand([...playerHand, ...community]);
       const bRes = evaluateHand([...botHand, ...community]);
 
@@ -298,16 +298,21 @@ module.exports = {
       );
       activePoker.delete(user.id);
 
-      const resultLabel = playerWins
-        ? `✅ **WIN** (${pRes.label})`
-        : isPush
-          ? `🤝 **PUSH**`
-          : `❌ **LOSS** (Bot: ${bRes.label})`;
+      const resultData = {
+        outcome: playerWins
+          ? "✅ YOU WON"
+          : isPush
+            ? "🤝 PUSH"
+            : "❌ HOUSE WON",
+        net: payout - currentBet,
+        hand: playerWins ? pRes.label : bRes.label,
+      };
+
       await i.update({
         embeds: [
           createEmbed(
-            resultLabel,
-            true,
+            resultData.outcome,
+            resultData,
             playerWins ? 0x2ecc71 : isPush ? 0xf1c40f : 0xe74c3c,
           ),
         ],
@@ -329,7 +334,13 @@ module.exports = {
         activePoker.delete(user.id);
         community.push(deck.pop(), deck.pop());
         await interaction.editReply({
-          embeds: [createEmbed("⏱️ **AFK - Folded**", true, 0x34495e)],
+          embeds: [
+            createEmbed(
+              "⏱️ TIMEOUT",
+              { outcome: "Auto-Fold", net: -currentBet, hand: "Timed Out" },
+              0x34495e,
+            ),
+          ],
           components: [],
         });
       }
