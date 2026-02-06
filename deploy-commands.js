@@ -198,14 +198,13 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName("scratch")
-    .setDescription("Buy a 5x5 scratch card and find the jackpot!")
+    .setDescription("Buy a 5x5 scratch card for 200 gold!")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-300)")
+        .setDescription("The cost of the card")
         .setRequired(true)
-        .setMinValue(50)
-        .setMaxValue(300),
+        .addChoices({ name: "200 Gold", value: 200 }),
     ),
   new SlashCommandBuilder()
     .setName("help")
