@@ -4,6 +4,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ComponentType,
+  SlashCommandBuilder,
 } = require("discord.js");
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
@@ -11,7 +12,7 @@ const { logToAudit } = require("../utils/logger");
 const activeScratch = new Map();
 const SESSION_EXPIRY = 45000;
 
-// GLOBAL CLEANUP: Runs every 30s
+// GLOBAL CLEANUP: Runs every 30s to keep execution fast
 setInterval(() => {
   const now = Date.now();
   for (const [id, ts] of activeScratch) {
@@ -20,10 +21,21 @@ setInterval(() => {
 }, 30000);
 
 module.exports = {
-  name: "scratch",
+  data: new SlashCommandBuilder()
+    .setName("scratch")
+    .setDescription("Buy a 5x5 scratch card and find the jackpot!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (25-500)")
+        .setRequired(true)
+        .setMinValue(25)
+        .setMaxValue(500),
+    ),
+
   async execute(interaction) {
     const { user, client, options } = interaction;
-    const amount = options.getInteger("amount"); // Dynamic bet amount
+    const amount = options.getInteger("amount");
 
     // 1. ATOMIC LOCK
     if (activeScratch.has(user.id)) {
@@ -38,6 +50,7 @@ module.exports = {
 
     let deductedUser;
     try {
+      // Deduct cost immediately with a check for sufficient funds
       deductedUser = await User.findOneAndUpdate(
         { userId: user.id, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -56,6 +69,7 @@ module.exports = {
       return interaction.editReply("❌ Database error. Try again.");
     }
 
+    // GRID GENERATOR: Handles initial view and final reveal
     const getGrid = (revealedPos = null, emoji = null, nearMisses = []) => {
       const rows = [];
       for (let i = 0; i < 5; i++) {
@@ -67,6 +81,7 @@ module.exports = {
           const miss = nearMisses.find((m) => m.pos === btnId);
 
           if (revealedPos === btnId) {
+            // The user's actual choice
             btn
               .setLabel(emoji)
               .setStyle(
@@ -74,11 +89,13 @@ module.exports = {
               )
               .setDisabled(true);
           } else if (miss) {
+            // The "Tease" reveals
             btn
               .setLabel(miss.icon)
               .setStyle(ButtonStyle.Secondary)
               .setDisabled(true);
           } else {
+            // Unscratched tiles
             btn
               .setLabel("?")
               .setStyle(ButtonStyle.Secondary)
@@ -118,10 +135,12 @@ module.exports = {
       if (i.user.id !== user.id)
         return i.reply({ content: "Not your card!", ephemeral: true });
 
+      // 2. IMMEDIATE STOP: Prevents double-clicking gold exploits
       collector.stop("scratched");
       let settled = false;
 
       try {
+        // 3. PROBABILITY ENGINE (80% RTP)
         const rng = Math.random() * 100;
         let mult = 0,
           emoji = "❌",
@@ -140,47 +159,46 @@ module.exports = {
           color = 0x5865f2;
         }
 
+        // 4. COORDINATE PARSING
         const [r, c] = i.customId.split("_").slice(1).map(Number);
 
-        // --- MULTI-NEAR-MISS LOGIC ---
+        // 5. ENHANCED VISUAL TEASE: Reveal where the winners "were"
         const nearMisses = [];
-        const offsets = [
-          [0, 1],
-          [0, -1],
-          [1, 0],
-          [-1, 0],
-          [1, 1],
-          [1, -1],
-          [-1, 1],
-          [-1, -1],
-        ];
-        const validOffsets = offsets
-          .map(([dr, dc]) => ({ r: r + dr, c: c + dc }))
-          .filter((pos) => pos.r >= 0 && pos.r < 5 && pos.c >= 0 && pos.c < 5)
-          .sort(() => Math.random() - 0.5); // Shuffle offsets
+        const allOtherPositions = [];
+        for (let rIdx = 0; rIdx < 5; rIdx++) {
+          for (let cIdx = 0; cIdx < 5; cIdx++) {
+            if (rIdx !== r || cIdx !== c)
+              allOtherPositions.push({ r: rIdx, c: cIdx });
+          }
+        }
+        allOtherPositions.sort(() => Math.random() - 0.5);
 
-        // Add 10x Tease (if not won)
-        if (mult < 10 && validOffsets.length > 0) {
-          const p = validOffsets.pop();
+        // Show the 10x Jackpot they missed
+        if (mult < 10) {
+          const p = allOtherPositions.pop();
           nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🏆" });
         }
-        // Add 2x Tease (if lost)
-        if (mult < 2 && validOffsets.length > 0) {
-          const p = validOffsets.pop();
-          nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
+        // Show NINE 2x Multipliers to make the card look "loaded"
+        const teaseCount = 9;
+        for (let j = 0; j < teaseCount; j++) {
+          if (allOtherPositions.length > 0) {
+            const p = allOtherPositions.pop();
+            nearMisses.push({ pos: `scr_${p.r}_${p.c}`, icon: "🎫" });
+          }
         }
 
         const payout = amount * mult;
         const net = payout - amount;
 
-        // SETTLEMENT
+        // 6. SETTLEMENT: Money logic handled BEFORE UI update
         const finalUser = await User.findOneAndUpdate(
           { userId: user.id },
           { $inc: { gold: payout } },
           { new: true },
         );
-        settled = true;
+        settled = true; // Mark as settled for idempotency
 
+        // 7. UI UPDATE: Decoupled to prevent money errors on Discord lag
         const resultEmbed = new EmbedBuilder()
           .setTitle(`🎫 Result: ${status}`)
           .setColor(color)
@@ -203,7 +221,7 @@ module.exports = {
             components: getGrid(i.customId, emoji, nearMisses),
           });
         } catch (uiErr) {
-          console.error("UI Update Failed:", uiErr);
+          console.error("UI Update Failed (Money was settled):", uiErr);
         }
 
         logToAudit(client, {
@@ -216,6 +234,7 @@ module.exports = {
         });
       } catch (err) {
         console.error("Scratch Processing Error:", err);
+        // 8. EMERGENCY REFUND: Only if DB failed before payout
         if (!settled) {
           await User.updateOne({ userId: user.id }, { $inc: { gold: amount } });
           const errContent = "❌ Card failed. Your bet has been refunded.";
