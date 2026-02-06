@@ -52,15 +52,13 @@ const getShoe = (deckCount = 6) => {
   return shoe;
 };
 
-const getKickerScore = (ranks) => {
-  return (
-    (ranks[0] || 0) * P4 +
-    (ranks[1] || 0) * P3 +
-    (ranks[2] || 0) * P2 +
-    (ranks[3] || 0) * P1 +
-    (ranks[4] || 0) * P0
-  );
-};
+/* --- Evaluator stays same (Mathematically Correct) --- */
+const getKickerScore = (ranks) =>
+  (ranks[0] || 0) * P4 +
+  (ranks[1] || 0) * P3 +
+  (ranks[2] || 0) * P2 +
+  (ranks[3] || 0) * P1 +
+  (ranks[4] || 0) * P0;
 
 const evaluateHand = (cards) => {
   const order = "23456789TJQKA";
@@ -69,7 +67,6 @@ const evaluateHand = (cards) => {
     .sort((a, b) => b.rank - a.rank);
   const suits = { S: [], H: [], C: [], D: [] };
   sorted.forEach((c) => suits[c.suit].push(c));
-
   let bestFlush = null;
   for (const s in suits) {
     if (suits[s].length >= 5) {
@@ -88,7 +85,6 @@ const evaluateHand = (cards) => {
     }
   }
   if (bestFlush && bestFlush.label === "Straight Flush") return bestFlush;
-
   const counts = {};
   sorted.forEach((c) => (counts[c.val] = (counts[c.val] || 0) + 1));
   const countArr = Object.entries(counts)
@@ -96,15 +92,14 @@ const evaluateHand = (cards) => {
     .sort((a, b) =>
       b.count !== a.count ? b.count - a.count : b.rank - a.rank,
     );
-
-  if (countArr[0].count === 4) {
-    const kicker = sorted.find((c) => c.val !== countArr[0].val).rank;
+  if (countArr[0].count === 4)
     return {
-      score: 7 * P5 + countArr[0].rank * P4 + kicker * P3,
+      score:
+        7 * P5 +
+        countArr[0].rank * P4 +
+        sorted.find((c) => c.val !== countArr[0].val).rank * P3,
       label: "Four of a Kind",
     };
-  }
-
   const triples = countArr.filter((c) => c.count >= 3);
   const pairsOrTrips = countArr.filter((c) => c.count >= 2);
   if (triples.length >= 1 && pairsOrTrips.length >= 2) {
@@ -117,45 +112,44 @@ const evaluateHand = (cards) => {
       label: "Full House",
     };
   }
-
   if (bestFlush) return bestFlush;
-
   const sHigh = getStraightHigh(sorted);
   if (sHigh !== -1) return { score: 4 * P5 + sHigh * P4, label: "Straight" };
-
-  if (countArr[0].count === 3) {
-    const kickers = sorted
-      .filter((c) => c.val !== countArr[0].val)
-      .map((c) => c.rank);
+  if (countArr[0].count === 3)
     return {
-      score: 3 * P5 + countArr[0].rank * P4 + getKickerScore(kickers),
+      score:
+        3 * P5 +
+        countArr[0].rank * P4 +
+        getKickerScore(
+          sorted.filter((c) => c.val !== countArr[0].val).map((c) => c.rank),
+        ),
       label: "Three of a Kind",
     };
-  }
-
   const pairs = countArr
     .filter((c) => c.count === 2)
     .sort((a, b) => b.rank - a.rank);
-  if (pairs.length >= 2) {
-    const kicker = sorted
-      .filter((c) => c.val !== pairs[0].val && c.val !== pairs[1].val)
-      .map((c) => c.rank);
+  if (pairs.length >= 2)
     return {
-      score: 2 * P5 + pairs[0].rank * P4 + pairs[1].rank * P3 + kicker[0] * P2,
+      score:
+        2 * P5 +
+        pairs[0].rank * P4 +
+        pairs[1].rank * P3 +
+        sorted.filter(
+          (c) => c.val !== pairs[0].val && c.val !== pairs[1].val,
+        )[0].rank *
+          P2,
       label: "Two Pair",
     };
-  }
-
-  if (pairs.length === 1) {
-    const kickers = sorted
-      .filter((c) => c.val !== pairs[0].val)
-      .map((c) => c.rank);
+  if (pairs.length === 1)
     return {
-      score: 1 * P5 + pairs[0].rank * P4 + getKickerScore(kickers),
+      score:
+        1 * P5 +
+        pairs[0].rank * P4 +
+        getKickerScore(
+          sorted.filter((c) => c.val !== pairs[0].val).map((c) => c.rank),
+        ),
       label: "Pair",
     };
-  }
-
   return {
     score: getKickerScore(sorted.map((c) => c.rank)),
     label: "High Card",
@@ -166,9 +160,8 @@ const getStraightHigh = (cards) => {
   const uniqueRanks = [...new Set(cards.map((c) => c.rank))].sort(
     (a, b) => b - a,
   );
-  for (let i = 0; i <= uniqueRanks.length - 5; i++) {
+  for (let i = 0; i <= uniqueRanks.length - 5; i++)
     if (uniqueRanks[i] - uniqueRanks[i + 4] === 4) return uniqueRanks[i];
-  }
   if ([12, 0, 1, 2, 3].every((r) => uniqueRanks.includes(r))) return 3;
   return -1;
 };
@@ -184,18 +177,19 @@ module.exports = {
     for (const [id, ts] of activePoker)
       if (now - ts > SESSION_EXPIRY) activePoker.delete(id);
 
-    if (!currentBet || currentBet < 25 || currentBet > MAX_BET) {
+    if (!currentBet || currentBet < 25 || currentBet > MAX_BET)
       return interaction.reply({
-        content: `❌ Bet between 25-${MAX_BET} gold!`,
+        content: `❌ Bet 25-${MAX_BET} gold!`,
         ephemeral: true,
       });
-    }
-
     if (activePoker.has(user.id))
-      return interaction.reply({ content: "❌ Game active!", ephemeral: true });
+      return interaction.reply({
+        content: "❌ Finish current game!",
+        ephemeral: true,
+      });
 
     await interaction.deferReply();
-    const userData = await User.findOne({ userId: user.id });
+    let userData = await User.findOne({ userId: user.id });
     if (!userData || userData.gold < currentBet)
       return interaction.editReply("❌ Not enough gold!");
 
@@ -211,7 +205,7 @@ module.exports = {
       const embed = new EmbedBuilder()
         .setTitle("🃏 Casino Texas Hold'em")
         .setColor(color)
-        .setDescription(`## ${status}\n${"▬".repeat(18)}`)
+        .setDescription(`## ${status}\n${"▬".repeat(22)}`)
         .addFields(
           {
             name: "👤 YOUR HAND",
@@ -219,27 +213,36 @@ module.exports = {
             inline: true,
           },
           {
-            name: "🤖 BOT HAND",
+            name: "🤖 HOUSE HAND",
             value: resultData ? botHand.map((c) => c.id).join(" ") : "❓ ❓",
             inline: true,
           },
           {
-            name: "🎴 BOARD",
-            value: community.map((c) => c.id).join(" ") || "Preparing...",
+            name: "🎴 THE BOARD",
+            value: community.map((c) => c.id).join(" "),
             inline: false,
           },
         );
 
       if (resultData) {
+        const profitText =
+          resultData.net > 0
+            ? `+${resultData.net} (Winner!)`
+            : resultData.net < 0
+              ? `${resultData.net} (Loss)`
+              : `0 (Push)`;
         embed.addFields({
-          name: "📊 FINAL SETTLEMENT",
-          value: `> **Result:** ${resultData.outcome}\n> **Net Change:** \`${resultData.net > 0 ? "+" : ""}${resultData.net}\` gold\n> **Hand:** ${resultData.hand}`,
+          name: "💰 FINAL SETTLEMENT",
+          value: `\`\`\`diff\n- Initial Bet: ${currentBet}\n+ Payout Received: ${resultData.payout}\n${resultData.net >= 0 ? "+" : "-"} Profit/Loss: ${profitText}\n\`\`\``,
           inline: false,
         });
       }
 
+      const currentBalance = resultData
+        ? resultData.balance
+        : userData.gold - currentBet;
       embed.setFooter({
-        text: `💰 Bet: ${currentBet} | Shoe: ${deck.length} cards remaining`,
+        text: `💵 Balance: ${currentBalance} | Shoe: ${deck.length} cards left`,
       });
       return embed;
     };
@@ -256,7 +259,7 @@ module.exports = {
     );
 
     const msg = await interaction.editReply({
-      embeds: [createEmbed("The Flop is out. Will you Call or Fold?")],
+      embeds: [createEmbed("Flop dealt. Call to see the turn and river.")],
       components: [row],
     });
     const collector = msg.createMessageComponentCollector({
@@ -266,7 +269,7 @@ module.exports = {
 
     collector.on("collect", async (i) => {
       if (i.user.id !== user.id)
-        return i.reply({ content: "Not your game!", ephemeral: true });
+        return i.reply({ content: "Not yours!", ephemeral: true });
       collector.stop("processed");
 
       if (i.customId === "p_fold") {
@@ -275,7 +278,12 @@ module.exports = {
           embeds: [
             createEmbed(
               "🏳️ YOU FOLDED",
-              { outcome: "House Wins", net: -currentBet, hand: "N/A" },
+              {
+                outcome: "Folded",
+                payout: 0,
+                net: -currentBet,
+                balance: userData.gold - currentBet,
+              },
               0xe74c3c,
             ),
           ],
@@ -304,14 +312,16 @@ module.exports = {
           : isPush
             ? "🤝 PUSH"
             : "❌ HOUSE WON",
+        payout: payout,
         net: payout - currentBet,
+        balance: finalUser.gold,
         hand: playerWins ? pRes.label : bRes.label,
       };
 
       await i.update({
         embeds: [
           createEmbed(
-            resultData.outcome,
+            `${resultData.outcome} with ${playerWins ? pRes.label : bRes.label}`,
             resultData,
             playerWins ? 0x2ecc71 : isPush ? 0xf1c40f : 0xe74c3c,
           ),
@@ -322,7 +332,7 @@ module.exports = {
       logToAudit(client, {
         userId: user.id,
         bet: currentBet,
-        amount: payout - currentBet,
+        amount: resultData.net,
         oldBalance: userData.gold - currentBet,
         newBalance: finalUser.gold,
         reason: `Poker: ${pRes.label} vs ${bRes.label}`,
@@ -333,11 +343,17 @@ module.exports = {
       if (reason === "time") {
         activePoker.delete(user.id);
         community.push(deck.pop(), deck.pop());
+        const afkUser = await User.findOne({ userId: user.id });
         await interaction.editReply({
           embeds: [
             createEmbed(
-              "⏱️ TIMEOUT",
-              { outcome: "Auto-Fold", net: -currentBet, hand: "Timed Out" },
+              "⏱️ TIMEOUT (Fold)",
+              {
+                outcome: "AFK",
+                payout: 0,
+                net: -currentBet,
+                balance: afkUser.gold,
+              },
               0x34495e,
             ),
           ],
