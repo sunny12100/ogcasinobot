@@ -11,69 +11,32 @@ const { logToAudit } = require("../utils/logger");
 const activeBlackjack = new Set();
 const MAX_BET = 200;
 
-/* -------------------- PERSISTENT DECK -------------------- */
-// This stays outside the module.exports so it persists between command calls
-let globalDeck = [];
-
-const shuffleShoe = () => {
-  const suits = ["♠️", "❤️", "♣️", "♦️"];
-  const values = [
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "10",
-    "J",
-    "Q",
-    "K",
-    "A",
-  ];
-  let newDeck = [];
-  // Standard 6-deck shoe
-  for (let i = 0; i < 6; i++) {
-    for (const s of suits) {
-      for (const v of values) newDeck.push(`${v}${s}`);
-    }
-  }
-  newDeck.sort(() => Math.random() - 0.5);
-  globalDeck = newDeck;
-};
-
-// Initial shuffle when the bot starts/loads the file
-shuffleShoe();
-
 module.exports = {
   name: "blackjack",
 
   async execute(interaction) {
     const userId = interaction.user.id;
-    const currentBet = interaction.options.getInteger("amount");
+    // Handle both Slash Commands and prefix commands if necessary
+    const currentBet = interaction.options?.getInteger("amount") || 200;
 
-    // Check if deck needs reshuffling before starting
-    if (globalDeck.length < 20) {
-      shuffleShoe();
-    }
-
-    if (currentBet > MAX_BET) {
+    // 1. PREVENT MULTIPLE GAMES
+    if (activeBlackjack.has(userId)) {
       return interaction.reply({
-        content: `❌ Max bet is ${MAX_BET}!`,
+        content: "❌ Game already in progress! Finish it first.",
         ephemeral: true,
       });
     }
 
-    if (activeBlackjack.has(userId)) {
+    if (currentBet > MAX_BET || currentBet < 50) {
       return interaction.reply({
-        content: "❌ Game already in progress!",
+        content: `❌ Bets must be between 50 and ${MAX_BET} gold!`,
         ephemeral: true,
       });
     }
 
     await interaction.deferReply();
 
+    // 2. CHECK & DEDUCT BALANCE
     const userData = await User.findOne({ userId });
     if (!userData || userData.gold < currentBet) {
       return interaction.editReply({ content: "❌ Not enough gold!" });
@@ -83,11 +46,43 @@ module.exports = {
     const initialBalance = userData.gold;
     await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
 
+    /* -------------------- FRESH DECK PER GAME -------------------- */
+    // Moving deck inside execute stops card-counting exploits.
+    const generateDeck = () => {
+      const suits = ["♠️", "❤️", "♣️", "♦️"];
+      const values = [
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "J",
+        "Q",
+        "K",
+        "A",
+      ];
+      let newDeck = [];
+      // Use 6 decks to maintain standard casino house edge
+      for (let i = 0; i < 6; i++) {
+        for (const s of suits) {
+          for (const v of values) newDeck.push(`${v}${s}`);
+        }
+      }
+      return newDeck.sort(() => Math.random() - 0.5);
+    };
+
+    let deck = generateDeck();
+    let playerHand = [deck.pop(), deck.pop()];
+    let dealerHand = [deck.pop(), deck.pop()];
     let currentPot = currentBet;
-    let isProcessing = false;
     let isSplit = false;
     let splitHands = [];
     let activeHandIndex = 0;
+    let isProcessing = false;
 
     const getVal = (hand) => {
       let total = 0;
@@ -108,28 +103,6 @@ module.exports = {
     };
 
     const cardVal = (card) => card.replace(/[♠️❤️♣️♦️]/g, "").trim();
-
-    /* -------------------- RIGGING -------------------- */
-    const shouldBiasDealer = currentBet >= 100 && Math.random() < 0.45;
-    const riggedPop = (bias = false, handVal = 0) => {
-      // Use globalDeck instead of local deck
-      if (!bias || handVal < 12) return globalDeck.pop();
-      const riskyCards = globalDeck.filter((card) => {
-        const v = cardVal(card);
-        const val =
-          v === "A" ? 11 : ["J", "Q", "K"].includes(v) ? 10 : parseInt(v);
-        return handVal + val > 21;
-      });
-      if (riskyCards.length && Math.random() < 0.35) {
-        const card = riskyCards[Math.floor(Math.random() * riskyCards.length)];
-        globalDeck.splice(globalDeck.indexOf(card), 1);
-        return card;
-      }
-      return globalDeck.pop();
-    };
-
-    let playerHand = [globalDeck.pop(), globalDeck.pop()];
-    let dealerHand = [globalDeck.pop(), globalDeck.pop()];
 
     const createEmbed = (
       title,
@@ -156,7 +129,7 @@ module.exports = {
           },
         )
         .setFooter({
-          text: `💰 Bet: ${currentPot} | Shoe: ${globalDeck.length} cards remaining`,
+          text: `💰 Bet: ${currentPot} | Total Cards: ${deck.length}`,
         });
     };
 
@@ -190,10 +163,11 @@ module.exports = {
       return row;
     };
 
-    /* -------------------- INITIAL BLACKJACK -------------------- */
+    /* -------------------- INITIAL BLACKJACK CHECK -------------------- */
     if (getVal(playerHand) === 21) {
       activeBlackjack.delete(userId);
       const dVal = getVal(dealerHand);
+      // Payout 3:2 for Blackjack (2.5x total) or push if dealer also has 21
       const payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
       const finalUser = await User.findOneAndUpdate(
         { userId },
@@ -201,22 +175,13 @@ module.exports = {
         { new: true },
       );
 
-      logToAudit(interaction.client, {
-        userId,
-        bet: currentBet,
-        amount: payout - currentPot,
-        oldBalance: initialBalance,
-        newBalance: finalUser.gold,
-        reason: "Blackjack: Natural 21",
-      }).catch(() => null);
-
       return interaction.editReply({
         embeds: [
           createEmbed(
-            "🎉 WINNER",
+            "🎉 BLACKJACK!",
             0x2ecc71,
             true,
-            dVal === 21 ? "🤝 **PUSH (Both 21)**" : "🂡 **BLACKJACK!**",
+            dVal === 21 ? "🤝 **PUSH (Both 21)**" : "💰 **WINNER!**",
           ),
         ],
         components: [],
@@ -240,7 +205,7 @@ module.exports = {
       isProcessing = true;
 
       if (i.customId === "hit") {
-        playerHand.push(riggedPop(shouldBiasDealer, getVal(playerHand)));
+        playerHand.push(deck.pop());
         if (getVal(playerHand) >= 21) {
           if (isSplit && activeHandIndex === 0) {
             activeHandIndex = 1;
@@ -271,8 +236,8 @@ module.exports = {
         currentPot += currentBet;
         isSplit = true;
         splitHands = [
-          [playerHand[0], globalDeck.pop()],
-          [playerHand[1], globalDeck.pop()],
+          [playerHand[0], deck.pop()],
+          [playerHand[1], deck.pop()],
         ];
         playerHand = splitHands[0];
         activeHandIndex = 0;
@@ -300,9 +265,11 @@ module.exports = {
       activeBlackjack.delete(userId);
       let dVal = getVal(dealerHand);
       const pHands = isSplit ? splitHands : [playerHand];
+
+      // Dealer only plays if player hasn't busted all hands
       if (pHands.some((h) => getVal(h) <= 21)) {
         while (dVal < 17) {
-          dealerHand.push(globalDeck.pop());
+          dealerHand.push(deck.pop());
           dVal = getVal(dealerHand);
         }
       }
@@ -312,8 +279,9 @@ module.exports = {
       for (let idx = 0; idx < pHands.length; idx++) {
         const pVal = getVal(pHands[idx]);
         const label = isSplit ? `Hand ${idx + 1}` : "Game";
-        if (pVal > 21) handResults.push(`${label}: 💀 BUST`);
-        else if (dVal > 21 || pVal > dVal) {
+        if (pVal > 21) {
+          handResults.push(`${label}: 💀 BUST`);
+        } else if (dVal > 21 || pVal > dVal) {
           totalPayout += currentBet * 2;
           handResults.push(`${label}: ✅ WIN`);
         } else if (pVal === dVal) {
@@ -350,8 +318,8 @@ module.exports = {
         amount: totalPayout - currentPot,
         oldBalance: initialBalance,
         newBalance: finalUser.gold,
-        reason: `Blackjack: ${isSplit ? "Split Game" : "Standard Game"}`,
-      }).catch(() => null);
+        reason: `Blackjack: ${isSplit ? "Split" : "Standard"}`,
+      });
     });
   },
 };
