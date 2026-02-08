@@ -16,38 +16,39 @@ module.exports = {
 
   async execute(interaction) {
     const userId = interaction.user.id;
-    // Handle both Slash Commands and prefix commands if necessary
     const currentBet = interaction.options?.getInteger("amount") || 200;
 
-    // 1. PREVENT MULTIPLE GAMES
     if (activeBlackjack.has(userId)) {
       return interaction.reply({
-        content: "❌ Game already in progress! Finish it first.",
+        content: "❌ Game already in progress!",
         ephemeral: true,
       });
     }
 
     if (currentBet > MAX_BET || currentBet < 50) {
       return interaction.reply({
-        content: `❌ Bets must be between 50 and ${MAX_BET} gold!`,
+        content: `❌ Bet must be 50-${MAX_BET} gold!`,
         ephemeral: true,
       });
     }
 
     await interaction.deferReply();
 
-    // 2. CHECK & DEDUCT BALANCE
-    const userData = await User.findOne({ userId });
-    if (!userData || userData.gold < currentBet) {
+    // ATOMIC INITIAL DEDUCTION
+    const deductionResult = await User.findOneAndUpdate(
+      { userId, gold: { $gte: currentBet } },
+      { $inc: { gold: -currentBet } },
+      { new: true },
+    );
+
+    if (!deductionResult) {
       return interaction.editReply({ content: "❌ Not enough gold!" });
     }
 
     activeBlackjack.add(userId);
-    const initialBalance = userData.gold;
-    await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
+    const initialBalance = deductionResult.gold + currentBet;
 
-    /* -------------------- FRESH DECK PER GAME -------------------- */
-    // Moving deck inside execute stops card-counting exploits.
+    /* -------------------- FISHER-YATES SHUFFLE -------------------- */
     const generateDeck = () => {
       const suits = ["♠️", "❤️", "♣️", "♦️"];
       const values = [
@@ -66,13 +67,16 @@ module.exports = {
         "A",
       ];
       let newDeck = [];
-      // Use 6 decks to maintain standard casino house edge
       for (let i = 0; i < 6; i++) {
         for (const s of suits) {
           for (const v of values) newDeck.push(`${v}${s}`);
         }
       }
-      return newDeck.sort(() => Math.random() - 0.5);
+      for (let i = newDeck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
+      }
+      return newDeck;
     };
 
     let deck = generateDeck();
@@ -85,8 +89,8 @@ module.exports = {
     let isProcessing = false;
 
     const getVal = (hand) => {
-      let total = 0;
-      let aces = 0;
+      let total = 0,
+        aces = 0;
       for (const card of hand) {
         const v = card.replace(/[♠️❤️♣️♦️]/g, "");
         if (v === "A") {
@@ -129,11 +133,11 @@ module.exports = {
           },
         )
         .setFooter({
-          text: `💰 Bet: ${currentPot} | Total Cards: ${deck.length}`,
+          text: `💰 Bet: ${currentPot} | Shoe: Fisher-Yates Randomized`,
         });
     };
 
-    const buildButtons = async () => {
+    const buildButtons = () => {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("hit")
@@ -144,15 +148,12 @@ module.exports = {
           .setLabel("Stand")
           .setStyle(ButtonStyle.Secondary),
       );
-
-      const freshUser = await User.findOne({ userId });
-      const canSplit =
+      // OPTIMISTIC SPLIT: No DB read here; atomic deduction handles the check later
+      if (
         playerHand.length === 2 &&
         cardVal(playerHand[0]) === cardVal(playerHand[1]) &&
-        !isSplit &&
-        freshUser.gold >= currentBet;
-
-      if (canSplit) {
+        !isSplit
+      ) {
         row.addComponents(
           new ButtonBuilder()
             .setCustomId("split")
@@ -163,25 +164,22 @@ module.exports = {
       return row;
     };
 
-    /* -------------------- INITIAL BLACKJACK CHECK -------------------- */
     if (getVal(playerHand) === 21) {
       activeBlackjack.delete(userId);
       const dVal = getVal(dealerHand);
-      // Payout 3:2 for Blackjack (2.5x total) or push if dealer also has 21
       const payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
       const finalUser = await User.findOneAndUpdate(
         { userId },
         { $inc: { gold: payout } },
         { new: true },
       );
-
       return interaction.editReply({
         embeds: [
           createEmbed(
             "🎉 BLACKJACK!",
             0x2ecc71,
             true,
-            dVal === 21 ? "🤝 **PUSH (Both 21)**" : "💰 **WINNER!**",
+            dVal === 21 ? "🤝 **PUSH**" : "💰 **WINNER!**",
           ),
         ],
         components: [],
@@ -190,7 +188,7 @@ module.exports = {
 
     const msg = await interaction.editReply({
       embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
-      components: [await buildButtons()],
+      components: [buildButtons()],
     });
 
     const collector = msg.createMessageComponentCollector({
@@ -204,122 +202,152 @@ module.exports = {
       if (isProcessing) return;
       isProcessing = true;
 
-      if (i.customId === "hit") {
-        playerHand.push(deck.pop());
-        if (getVal(playerHand) >= 21) {
+      try {
+        if (i.customId === "hit") {
+          playerHand.push(deck.pop());
+          if (getVal(playerHand) >= 21) {
+            if (isSplit && activeHandIndex === 0) {
+              activeHandIndex = 1;
+              playerHand = splitHands[1];
+              await i.update({
+                embeds: [createEmbed("🃏 SPLIT: Hand 2", 0x5865f2)],
+                components: [buildButtons()],
+              });
+            } else {
+              collector.stop("ended");
+              await i.deferUpdate().catch(() => null);
+            }
+          } else {
+            await i.update({
+              embeds: [
+                createEmbed(
+                  isSplit
+                    ? `🃏 SPLIT: Hand ${activeHandIndex + 1}`
+                    : "🃏 BLACKJACK",
+                  0x5865f2,
+                ),
+              ],
+              components: [buildButtons()],
+            });
+          }
+        } else if (i.customId === "split") {
+          const splitResult = await User.updateOne(
+            { userId, gold: { $gte: currentBet } },
+            { $inc: { gold: -currentBet } },
+          );
+          if (splitResult.modifiedCount === 0) {
+            return i.reply({
+              content: "❌ Not enough gold to split!",
+              ephemeral: true,
+            });
+          }
+          currentPot += currentBet;
+          isSplit = true;
+          splitHands = [
+            [playerHand[0], deck.pop()],
+            [playerHand[1], deck.pop()],
+          ];
+          playerHand = splitHands[0];
+          activeHandIndex = 0;
+          await i.update({
+            embeds: [createEmbed("🃏 SPLIT: Hand 1", 0x5865f2)],
+            components: [buildButtons()],
+          });
+        } else if (i.customId === "stand") {
           if (isSplit && activeHandIndex === 0) {
             activeHandIndex = 1;
             playerHand = splitHands[1];
             await i.update({
               embeds: [createEmbed("🃏 SPLIT: Hand 2", 0x5865f2)],
-              components: [await buildButtons()],
+              components: [buildButtons()],
             });
           } else {
             collector.stop("ended");
             await i.deferUpdate().catch(() => null);
           }
-        } else {
-          await i.update({
-            embeds: [
-              createEmbed(
-                isSplit
-                  ? `🃏 SPLIT: Hand ${activeHandIndex + 1}`
-                  : "🃏 BLACKJACK",
-                0x5865f2,
-              ),
-            ],
-            components: [await buildButtons()],
-          });
         }
-      } else if (i.customId === "split") {
-        await User.updateOne({ userId }, { $inc: { gold: -currentBet } });
-        currentPot += currentBet;
-        isSplit = true;
-        splitHands = [
-          [playerHand[0], deck.pop()],
-          [playerHand[1], deck.pop()],
-        ];
-        playerHand = splitHands[0];
-        activeHandIndex = 0;
-        await i.update({
-          embeds: [createEmbed("🃏 SPLIT: Hand 1", 0x5865f2)],
-          components: [await buildButtons()],
-        });
-      } else if (i.customId === "stand") {
-        if (isSplit && activeHandIndex === 0) {
-          activeHandIndex = 1;
-          playerHand = splitHands[1];
-          await i.update({
-            embeds: [createEmbed("🃏 SPLIT: Hand 2", 0x5865f2)],
-            components: [await buildButtons()],
-          });
-        } else {
-          collector.stop("ended");
-          await i.deferUpdate().catch(() => null);
-        }
+      } catch (e) {
+        console.error("Collector Error:", e);
+      } finally {
+        isProcessing = false;
       }
-      isProcessing = false;
     });
 
     collector.on("end", async (_, reason) => {
-      activeBlackjack.delete(userId);
-      let dVal = getVal(dealerHand);
-      const pHands = isSplit ? splitHands : [playerHand];
-
-      // Dealer only plays if player hasn't busted all hands
-      if (pHands.some((h) => getVal(h) <= 21)) {
-        while (dVal < 17) {
-          dealerHand.push(deck.pop());
-          dVal = getVal(dealerHand);
+      try {
+        if (reason === "time") {
+          return interaction
+            .editReply({
+              embeds: [
+                createEmbed(
+                  "⏱️ EXPIRED",
+                  0x34495e,
+                  true,
+                  "Timed out. Bet forfeited.",
+                ),
+              ],
+              components: [],
+            })
+            .catch(() => null);
         }
-      }
 
-      let totalPayout = 0;
-      let handResults = [];
-      for (let idx = 0; idx < pHands.length; idx++) {
-        const pVal = getVal(pHands[idx]);
-        const label = isSplit ? `Hand ${idx + 1}` : "Game";
-        if (pVal > 21) {
-          handResults.push(`${label}: 💀 BUST`);
-        } else if (dVal > 21 || pVal > dVal) {
-          totalPayout += currentBet * 2;
-          handResults.push(`${label}: ✅ WIN`);
-        } else if (pVal === dVal) {
-          totalPayout += currentBet;
-          handResults.push(`${label}: 🤝 PUSH`);
-        } else {
-          handResults.push(`${label}: ❌ LOSE`);
+        let dVal = getVal(dealerHand);
+        const pHands = isSplit ? splitHands : [playerHand];
+        if (pHands.some((h) => getVal(h) <= 21)) {
+          while (dVal < 17) {
+            dealerHand.push(deck.pop());
+            dVal = getVal(dealerHand);
+          }
         }
+
+        let totalPayout = 0,
+          handResults = [];
+        for (let idx = 0; idx < pHands.length; idx++) {
+          const pVal = getVal(pHands[idx]);
+          const label = isSplit ? `Hand ${idx + 1}` : "Game";
+          if (pVal > 21) handResults.push(`${label}: 💀 BUST`);
+          else if (dVal > 21 || pVal > dVal) {
+            totalPayout += currentBet * 2;
+            handResults.push(`${label}: ✅ WIN`);
+          } else if (pVal === dVal) {
+            totalPayout += currentBet;
+            handResults.push(`${label}: 🤝 PUSH`);
+          } else handResults.push(`${label}: ❌ LOSE`);
+        }
+
+        const finalUser = await User.findOneAndUpdate(
+          { userId },
+          { $inc: { gold: totalPayout } },
+          { new: true },
+        );
+        await interaction
+          .editReply({
+            embeds: [
+              createEmbed(
+                totalPayout > currentPot ? "🎉 WINNER" : "💀 RESULT",
+                totalPayout > currentPot ? 0x2ecc71 : 0xe74c3c,
+                true,
+                handResults.join("\n"),
+              ),
+            ],
+            components: [],
+          })
+          .catch(() => null);
+
+        logToAudit(interaction.client, {
+          userId,
+          bet: currentBet,
+          amount: totalPayout - currentPot,
+          oldBalance: initialBalance,
+          newBalance: finalUser.gold,
+          reason: `Blackjack: ${isSplit ? "Split" : "Standard"}`,
+        });
+      } catch (err) {
+        console.error("End Logic Error:", err);
+      } finally {
+        // GUARANTEED UNLOCK
+        activeBlackjack.delete(userId);
       }
-
-      const finalUser = await User.findOneAndUpdate(
-        { userId },
-        { $inc: { gold: totalPayout } },
-        { new: true },
-      );
-
-      await interaction
-        .editReply({
-          embeds: [
-            createEmbed(
-              totalPayout > currentPot ? "🎉 WINNER" : "💀 RESULT",
-              totalPayout > currentPot ? 0x2ecc71 : 0xe74c3c,
-              true,
-              handResults.join("\n"),
-            ),
-          ],
-          components: [],
-        })
-        .catch(() => null);
-
-      logToAudit(interaction.client, {
-        userId,
-        bet: currentBet,
-        amount: totalPayout - currentPot,
-        oldBalance: initialBalance,
-        newBalance: finalUser.gold,
-        reason: `Blackjack: ${isSplit ? "Split" : "Standard"}`,
-      });
     });
   },
 };
