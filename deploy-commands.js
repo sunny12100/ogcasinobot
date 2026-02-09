@@ -191,10 +191,10 @@ const commands = [
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription("Gold to bet (50-300)")
+        .setDescription("Gold to bet (50-200)")
         .setRequired(true)
         .setMinValue(50)
-        .setMaxValue(300),
+        .setMaxValue(200),
     ),
   new SlashCommandBuilder()
     .setName("scratch")
