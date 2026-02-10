@@ -9,7 +9,7 @@ const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
 const activeHighLow = new Set();
-const MAX_BET = 1000000;
+const MAX_BET = 500;
 
 module.exports = {
   name: "highlow",
@@ -44,7 +44,7 @@ module.exports = {
     let failSafe;
 
     try {
-      // ATOMIC DEDUCTION
+      // Atomic bet deduction
       const userData = await User.findOneAndUpdate(
         { userId, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -59,6 +59,7 @@ module.exports = {
       }
 
       const initialBalance = userData.gold + amount;
+
       activeHighLow.add(userId);
       failSafe = setTimeout(() => activeHighLow.delete(userId), 35000);
 
@@ -77,6 +78,7 @@ module.exports = {
         "K",
         "A",
       ];
+
       const dealerIndex = Math.floor(Math.random() * (cards.length - 2)) + 1;
       const dealerCard = cards[dealerIndex];
 
@@ -105,6 +107,7 @@ module.exports = {
         embeds: [initialEmbed],
         components: [row],
       });
+
       const collector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: 15000,
@@ -113,17 +116,20 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your game!", ephemeral: true });
+
         if (settled) return;
         settled = true;
 
         const choice = i.customId;
         const userIndex = Math.floor(Math.random() * cards.length);
         const userCard = cards[userIndex];
+
         const won =
           (choice === "higher" && userIndex > dealerIndex) ||
           (choice === "lower" && userIndex < dealerIndex);
 
         const payout = won ? Math.floor(amount * 1.75) : 0;
+        const netChange = won ? payout - amount : -amount;
 
         await i.update({
           embeds: [
@@ -152,7 +158,12 @@ module.exports = {
               .setTitle(won ? "🎉 CORRECT!" : "💀 WRONG")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Dealer: **${dealerCard}** vs You: **${userCard}**\nResult: You were **${won ? "Right" : "Wrong"}**!\n\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+                `### Dealer: **${dealerCard}** vs You: **${userCard}**
+Result: You were **${won ? "Right" : "Wrong"}**!
+
+💰 **Payout:** \`${won ? payout.toLocaleString() : "0"}\` gold
+📈 **Net Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold
+🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
               );
 
             const repeatRow = new ActionRowBuilder().addComponents(
@@ -171,6 +182,7 @@ module.exports = {
               embeds: [resultEmbed],
               components: [repeatRow],
             });
+
             const endCollector = finalMsg.createMessageComponentCollector({
               componentType: ComponentType.Button,
               time: 10000,
@@ -183,26 +195,27 @@ module.exports = {
               endCollector.stop("replay");
 
               if (btnInt.customId === "hl_rep") {
-                // Issue #1 Fix: Force lock deletion before recursion
                 activeHighLow.delete(userId);
                 clearTimeout(failSafe);
                 await btnInt.deferUpdate();
                 return module.exports.execute(btnInt, Number(amount));
               }
+
               await btnInt.update({ components: [] });
             });
 
             await logToAudit(interaction.client, {
               userId,
               bet: amount,
-              amount: won ? payout - amount : -amount,
+              amount: netChange,
               oldBalance: initialBalance,
               newBalance: updatedUser.gold,
               reason: `High-Low: ${choice.toUpperCase()} (D: ${dealerCard} vs U: ${userCard})`,
             });
           } catch (settleErr) {
             console.error("[HighLow Settlement Error]", settleErr);
-            // Issue #2 Fix: Emergency Refund if DB hiccups during settlement
+
+            // Emergency refund (loss-safe bias)
             await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
               () => null,
             );
@@ -219,7 +232,9 @@ module.exports = {
         if (reason === "time" && !settled) {
           activeHighLow.delete(userId);
           clearTimeout(failSafe);
+
           await User.updateOne({ userId }, { $inc: { gold: amount } });
+
           await interaction
             .editReply({
               content: "⏲️ **Timed Out:** Bet refunded.",
