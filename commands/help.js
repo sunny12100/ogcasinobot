@@ -30,8 +30,9 @@ module.exports = {
             "`/aviator`\n" +
             "`/dice`\n" +
             "`/highlow`\n" +
-            "`/mines`\n" +
             "`/horserace`\n" +
+            "`/scratch`\n" +
+            "`/poker`\n" +
             "`/rps`– PvP between two players",
         },
         {
