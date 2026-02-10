@@ -79,7 +79,7 @@ module.exports = {
         "A",
       ];
 
-      const dealerIndex = Math.floor(Math.random() * (cards.length - 2));
+      const dealerIndex = Math.floor(Math.random() * cards.length);
       const dealerCard = cards[dealerIndex];
 
       const row = new ActionRowBuilder().addComponents(
