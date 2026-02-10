@@ -97,7 +97,7 @@ const evaluateHand = (cards) => {
         const sfScore = 8 * P5 + sFlushHigh * P4;
         if (!bestFlush || sfScore > bestFlush.score)
           bestFlush = { score: sfScore, label: "Straight Flush" };
-        if (sFlushHigh === 12) return bestFlush; // Royal Flush exit
+        if (sFlushHigh === 12) return bestFlush;
       } else {
         const fScore = 5 * P5 + getKickerScore(flushCards.map((c) => c.rank));
         if (!bestFlush || fScore > bestFlush.score)
@@ -197,7 +197,6 @@ module.exports = {
     const { user, options, client } = interaction;
     const currentBet = options.getInteger("amount");
 
-    // Stale Session Pruning
     const now = Date.now();
     for (const [id, ts] of activePoker)
       if (now - ts > SESSION_EXPIRY) activePoker.delete(id);
@@ -293,6 +292,7 @@ module.exports = {
       embeds: [createEmbed("Flop is dealt. Call to see the Showdown!")],
       components: [row],
     });
+
     const collector = msg.createMessageComponentCollector({
       componentType: ComponentType.Button,
       time: 45000,
@@ -301,6 +301,7 @@ module.exports = {
     collector.on("collect", async (i) => {
       if (i.user.id !== user.id)
         return i.reply({ content: "Not your game!", ephemeral: true });
+
       collector.stop("processed");
 
       if (i.customId === "p_fold") {
@@ -321,19 +322,27 @@ module.exports = {
         });
       }
 
-      community.push(deck.pop(), deck.pop()); // Deal Turn & River
+      community.push(deck.pop(), deck.pop());
+
       const pRes = evaluateHand([...playerHand, ...community]);
       const bRes = evaluateHand([...houseHand, ...community]);
 
       const playerWins = pRes.score > bRes.score;
       const isPush = pRes.score === bRes.score;
-      const payout = playerWins ? currentBet * 2 : isPush ? currentBet : 0;
+
+      // ✅ UPDATED 1.80x PAYOUT
+      const payout = playerWins
+        ? Math.floor(currentBet * 1.8)
+        : isPush
+          ? currentBet
+          : 0;
 
       const finalUser = await User.findOneAndUpdate(
         { userId: user.id },
         { $inc: { gold: payout } },
         { new: true },
       );
+
       activePoker.delete(user.id);
 
       const resultData = {
@@ -341,6 +350,7 @@ module.exports = {
         net: payout - currentBet,
         balance: finalUser.gold,
       };
+
       const finalStatus = playerWins
         ? `✅ WIN! (${pRes.label})`
         : isPush
@@ -372,7 +382,9 @@ module.exports = {
       if (reason === "time") {
         activePoker.delete(user.id);
         community.push(deck.pop(), deck.pop());
+
         const afkUser = await User.findOne({ userId: user.id });
+
         await interaction.editReply({
           embeds: [
             createEmbed(
