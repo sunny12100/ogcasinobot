@@ -9,36 +9,58 @@ const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
 const activeHighLow = new Set();
+const MAX_BET = 1000000;
 
 module.exports = {
   name: "highlow",
   async execute(interaction, repeatAmount = null) {
     const userId = interaction.user.id;
-    const amount = repeatAmount ?? interaction.options.getInteger("amount");
+    const amount = repeatAmount ?? interaction.options?.getInteger?.("amount");
 
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
+    // Validation
+    if (!amount || amount <= 0 || amount > MAX_BET) {
+      return interaction
+        .reply({
+          content: "❌ Invalid bet amount (1 - 1M gold).",
+          ephemeral: true,
+        })
+        .catch(() => null);
     }
 
+    // Lock Check
     if (activeHighLow.has(userId)) {
-      const lockMsg = "❌ You already have a game in progress!";
-      return interaction.editReply({ content: lockMsg });
+      return interaction
+        .reply({
+          content: "❌ You already have a game in progress!",
+          ephemeral: true,
+        })
+        .catch(() => null);
     }
+
+    if (!interaction.deferred && !interaction.replied)
+      await interaction.deferReply();
+
+    let settled = false;
+    let failSafe;
 
     try {
-      const userData = await User.findOne({ userId });
-      if (!userData || userData.gold < amount) {
-        const err = `❌ Not enough gold! Balance: \`${userData?.gold?.toLocaleString() || 0}\``;
-        return interaction.editReply({ content: err });
+      // ATOMIC DEDUCTION
+      const userData = await User.findOneAndUpdate(
+        { userId, gold: { $gte: amount } },
+        { $inc: { gold: -amount } },
+        { new: true },
+      );
+
+      if (!userData) {
+        const existing = await User.findOne({ userId });
+        return interaction.editReply({
+          content: `❌ Not enough gold! Balance: \`${(existing?.gold ?? 0).toLocaleString()}\``,
+        });
       }
 
-      const initialBalance = userData.gold;
+      const initialBalance = userData.gold + amount;
       activeHighLow.add(userId);
-
-      // 1. DEDUCT GOLD IMMEDIATELY (Hold the bet)
-      await User.updateOne({ userId }, { $inc: { gold: -amount } });
-
-      let gameStarted = false; // Flag to check if they clicked a button
+      failSafe = setTimeout(() => activeHighLow.delete(userId), 35000);
 
       const cards = [
         "2",
@@ -74,20 +96,16 @@ module.exports = {
       const initialEmbed = new EmbedBuilder()
         .setTitle("🃏 HIGH-LOW CARDS")
         .setColor(0x5865f2)
-        .setImage(
-          "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExYW5qb3o1ZW80N21kMXV0dmV4ZTg4eWU5M2FtY2M3NXN5NG9saGhndSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2hjPmNNYtVGFy/giphy.gif",
-        )
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nThe Dealer drew a: **[ ${dealerCard} ]**\nWill the next card be **Higher** or **Lower**?`,
+          `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nDealer's Card: **[ ${dealerCard} ]**\nWill the next card be **Higher** or **Lower**?`,
         )
-        .setFooter({ text: "Aces are the highest card!" });
+        .setFooter({ text: "Ties go to the House! Aces are High." });
 
-      const response = await interaction.editReply({
+      const msg = await interaction.editReply({
         embeds: [initialEmbed],
         components: [row],
       });
-
-      const collector = response.createMessageComponentCollector({
+      const collector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: 15000,
       });
@@ -95,70 +113,51 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your game!", ephemeral: true });
+        if (settled) return;
+        settled = true;
 
-        gameStarted = true; // Prevents the AFK refund from triggering
         const choice = i.customId;
+        const userIndex = Math.floor(Math.random() * cards.length);
+        const userCard = cards[userIndex];
+        const won =
+          (choice === "higher" && userIndex > dealerIndex) ||
+          (choice === "lower" && userIndex < dealerIndex);
 
-        if (choice === "higher" || choice === "lower") {
-          await i.update({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("🃏 SHUFFLING...")
-                .setColor(0xffaa00)
-                .setImage(
-                  "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcDJvZzRicXRqZnJiMjR0MXJ2ZGJhc2puN2JwbW43c21xaHg3NHJpNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/bG5rDPx76wHMZtsXmr/giphy.gif",
-                )
-                .setDescription(`You bet **${choice.toUpperCase()}**!`),
-            ],
-            components: [],
-          });
+        const payout = won ? Math.floor(amount * 1.75) : 0;
 
-          setTimeout(async () => {
-            activeHighLow.delete(userId);
+        await i.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🃏 SHUFFLING...")
+              .setColor(0xffaa00)
+              .setImage(
+                "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcDJvZzRicXRqZnJiMjR0MXJ2ZGJhc2puN2JwbW43c21xaHg3NHJpNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/bG5rDPx76wHMZtsXmr/giphy.gif",
+              ),
+          ],
+          components: [],
+        });
 
-            const isLucky = Math.random() < 0.45;
-            let userIndex;
-
-            if (isLucky) {
-              userIndex =
-                choice === "higher"
-                  ? Math.floor(
-                      Math.random() * (cards.length - 1 - dealerIndex),
-                    ) +
-                    (dealerIndex + 1)
-                  : Math.floor(Math.random() * dealerIndex);
-            } else {
-              userIndex =
-                choice === "higher"
-                  ? Math.floor(Math.random() * (dealerIndex + 1))
-                  : Math.floor(Math.random() * (cards.length - dealerIndex)) +
-                    dealerIndex;
-            }
-
-            const userCard = cards[userIndex];
-            const won =
-              (choice === "higher" && userIndex > dealerIndex) ||
-              (choice === "lower" && userIndex < dealerIndex);
-
-            // 2. PAYOUT CALCULATION
-            // If won, give back 2x (the original bet + the win). If lost, give 0.
-            const payout = won ? amount * 2 : 0;
+        setTimeout(async () => {
+          try {
             const updatedUser = await User.findOneAndUpdate(
               { userId },
               { $inc: { gold: payout } },
               { new: true },
             );
 
+            if (!updatedUser)
+              throw new Error("Database update failed during payout");
+
             const resultEmbed = new EmbedBuilder()
               .setTitle(won ? "🎉 CORRECT!" : "💀 WRONG")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Dealer: **${dealerCard}** vs Your Card: **${userCard}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\nResult: You chose **${choice.toUpperCase()}** and were **${won ? "Right" : "Wrong"}**!\n\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+                `### Dealer: **${dealerCard}** vs You: **${userCard}**\nResult: You were **${won ? "Right" : "Wrong"}**!\n\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
               );
 
             const repeatRow = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
-                .setCustomId(`hl_rep_${amount}`)
+                .setCustomId("hl_rep")
                 .setLabel("Play Again")
                 .setStyle(ButtonStyle.Success)
                 .setDisabled(updatedUser.gold < amount),
@@ -172,59 +171,68 @@ module.exports = {
               embeds: [resultEmbed],
               components: [repeatRow],
             });
-
-            await logToAudit(interaction.client, {
-              userId: userId,
-              bet: amount,
-              amount: won ? amount : -amount,
-              oldBalance: initialBalance,
-              newBalance: updatedUser.gold,
-              reason: `High-Low: ${choice.toUpperCase()} (Dealer: ${dealerCard} vs User: ${userCard})`,
-            }).catch((err) => console.error("[AUDIT LOG ERROR]", err));
-
             const endCollector = finalMsg.createMessageComponentCollector({
               componentType: ComponentType.Button,
-              time: 15000,
+              time: 10000,
             });
 
             endCollector.on("collect", async (btnInt) => {
               if (btnInt.user.id !== userId)
                 return btnInt.reply({ content: "Not yours!", ephemeral: true });
-              endCollector.stop();
-              activeHighLow.delete(userId);
-              if (btnInt.customId.startsWith("hl_rep_"))
-                return this.execute(btnInt, amount);
-              if (btnInt.customId === "hl_quit")
-                await btnInt.update({ components: [] });
+
+              endCollector.stop("replay");
+
+              if (btnInt.customId === "hl_rep") {
+                // Issue #1 Fix: Force lock deletion before recursion
+                activeHighLow.delete(userId);
+                clearTimeout(failSafe);
+                await btnInt.deferUpdate();
+                return module.exports.execute(btnInt, Number(amount));
+              }
+              await btnInt.update({ components: [] });
             });
-          }, 3000);
-          collector.stop();
-        }
+
+            await logToAudit(interaction.client, {
+              userId,
+              bet: amount,
+              amount: won ? payout - amount : -amount,
+              oldBalance: initialBalance,
+              newBalance: updatedUser.gold,
+              reason: `High-Low: ${choice.toUpperCase()} (D: ${dealerCard} vs U: ${userCard})`,
+            });
+          } catch (settleErr) {
+            console.error("[HighLow Settlement Error]", settleErr);
+            // Issue #2 Fix: Emergency Refund if DB hiccups during settlement
+            await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
+              () => null,
+            );
+          } finally {
+            activeHighLow.delete(userId);
+            clearTimeout(failSafe);
+          }
+        }, 2000);
+
+        collector.stop();
       });
 
       collector.on("end", async (collected, reason) => {
-        if (reason === "time") {
+        if (reason === "time" && !settled) {
           activeHighLow.delete(userId);
-
-          // 3. REFUND LOGIC
-          if (!gameStarted) {
-            await User.updateOne({ userId }, { $inc: { gold: amount } });
-            interaction
-              .editReply({
-                content:
-                  "⏲️ **Game Timed Out:** You didn't make a choice in time. Your bet has been refunded.",
-                embeds: [],
-                components: [],
-              })
-              .catch(() => null);
-          } else {
-            interaction.editReply({ components: [] }).catch(() => null);
-          }
+          clearTimeout(failSafe);
+          await User.updateOne({ userId }, { $inc: { gold: amount } });
+          await interaction
+            .editReply({
+              content: "⏲️ **Timed Out:** Bet refunded.",
+              embeds: [],
+              components: [],
+            })
+            .catch(() => null);
         }
       });
     } catch (err) {
-      console.error(err);
+      console.error("[HighLow Fatal Error]", err);
       activeHighLow.delete(userId);
+      clearTimeout(failSafe);
     }
   },
 };
