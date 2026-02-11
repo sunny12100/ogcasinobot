@@ -21,7 +21,7 @@ module.exports = {
     if (!amount || amount <= 0 || amount > MAX_BET) {
       return interaction
         .reply({
-          content: "❌ Invalid bet amount (1 - 500 gold).",
+          content: "❌ Invalid bet amount (1 - 1M gold).",
           ephemeral: true,
         })
         .catch(() => null);
@@ -128,8 +128,7 @@ module.exports = {
           (choice === "higher" && userIndex > dealerIndex) ||
           (choice === "lower" && userIndex < dealerIndex);
 
-        // ⭐ 1.75x payout
-        const payout = won ? Math.floor(amount * 1.75) : 0;
+        const payout = won ? Math.floor(amount * 1.2) : 0;
         const netChange = won ? payout - amount : -amount;
 
         await i.update({
@@ -216,7 +215,7 @@ Result: You were **${won ? "Right" : "Wrong"}**!
           } catch (settleErr) {
             console.error("[HighLow Settlement Error]", settleErr);
 
-            // Emergency refund
+            // Emergency refund (loss-safe bias)
             await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
               () => null,
             );
