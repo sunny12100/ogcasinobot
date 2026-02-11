@@ -128,7 +128,7 @@ module.exports = {
           (choice === "higher" && userIndex > dealerIndex) ||
           (choice === "lower" && userIndex < dealerIndex);
 
-        const payout = won ? Math.floor(amount * 1.75) : 0;
+        const payout = won ? Math.floor(amount * 1.2) : 0;
         const netChange = won ? payout - amount : -amount;
 
         await i.update({
