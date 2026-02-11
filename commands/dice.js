@@ -17,7 +17,7 @@ module.exports = {
     const userId = interaction.user.id;
     const amount = repeatAmount ?? interaction.options?.getInteger?.("amount");
 
-    // 1. PRE-ACKNOWLEDGEMENT VALIDATION
+    // Validation
     if (!amount || amount <= 0 || amount > MAX_BET) {
       return interaction
         .reply({ content: "❌ Invalid bet (1 - 1M gold).", ephemeral: true })
@@ -37,7 +37,7 @@ module.exports = {
     let failSafe;
 
     try {
-      // 2. ATOMIC DEDUCTION
+      // Atomic deduction
       const userData = await User.findOneAndUpdate(
         { userId, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -52,26 +52,14 @@ module.exports = {
       }
 
       const initialBalance = userData.gold + amount;
+
       activeDice.add(userId);
       failSafe = setTimeout(() => activeDice.delete(userId), 35000);
 
       const rollDice = () =>
         Math.floor(Math.random() * 6) + 1 + (Math.floor(Math.random() * 6) + 1);
-      const dealerRoll = rollDice();
-      const diceEmojis = {
-        2: "⚀⚀",
-        3: "⚀⚁",
-        4: "⚁⚁",
-        5: "⚁⚂",
-        6: "⚂⚂",
-        7: "⚅⚀",
-        8: "⚃⚃",
-        9: "⚃⚄",
-        10: "⚅⚃",
-        11: "⚅⚄",
-        12: "⚅⚅",
-      };
 
+      // Player chooses BEFORE rolls
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("higher")
@@ -86,19 +74,18 @@ module.exports = {
       );
 
       const initialEmbed = new EmbedBuilder()
-        .setTitle("🎲 DOUBLE DICE: HIGHER OR LOWER")
+        .setTitle("🎲 DOUBLE DICE")
         .setColor(0x5865f2)
         .setDescription(
-          `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nDealer rolled: **${diceEmojis[dealerRoll] || "🎲🎲"} (${dealerRoll})**\nWill your roll be **Higher** or **Lower**?`,
+          `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nChoose **Higher** or **Lower**.\nBoth dice will roll after your choice!`,
         )
-        .setFooter({
-          text: "Standard 2d6 Bell Curve probability. Ties = Loss.",
-        });
+        .setFooter({ text: "Fair roll system • Ties = Loss" });
 
       const msg = await interaction.editReply({
         embeds: [initialEmbed],
         components: [row],
       });
+
       const collector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: 20000,
@@ -107,10 +94,12 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your game!", ephemeral: true });
+
         if (settled) return;
         settled = true;
 
         const choice = i.customId;
+
         await i.update({
           embeds: [
             new EmbedBuilder()
@@ -125,14 +114,15 @@ module.exports = {
 
         setTimeout(async () => {
           try {
+            const dealerRoll = rollDice();
             const userRoll = rollDice();
+
             const won =
               (choice === "higher" && userRoll > dealerRoll) ||
               (choice === "lower" && userRoll < dealerRoll);
 
-            // House edge: 1.75x payout
+            // 1.75x payout
             const payout = won ? Math.floor(amount * 1.75) : 0;
-            // CORRECT UI MATH: (Win: +0.75x | Loss: -1.0x)
             const netChange = won ? payout - amount : -amount;
 
             const updatedUser = await User.findOneAndUpdate(
@@ -147,7 +137,11 @@ module.exports = {
               .setTitle(won ? "🎉 YOU WON!" : "💀 HOUSE WINS")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Dealer: **${dealerRoll}** vs You: **${userRoll}**\nResult: You were **${won ? "Correct" : "Incorrect"}**\n\n💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+                `### Dealer: **${dealerRoll}** vs You: **${userRoll}**
+Result: You were **${won ? "Correct" : "Incorrect"}**
+
+💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold
+🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
               );
 
             const repeatRow = new ActionRowBuilder().addComponents(
@@ -166,6 +160,7 @@ module.exports = {
               embeds: [resultEmbed],
               components: [repeatRow],
             });
+
             const endCollector = finalMsg.createMessageComponentCollector({
               componentType: ComponentType.Button,
               time: 10000,
@@ -174,13 +169,16 @@ module.exports = {
             endCollector.on("collect", async (btnInt) => {
               if (btnInt.user.id !== userId)
                 return btnInt.reply({ content: "Not yours!", ephemeral: true });
+
               endCollector.stop();
+
               if (btnInt.customId === "dice_rep") {
                 activeDice.delete(userId);
                 clearTimeout(failSafe);
                 await btnInt.deferUpdate();
                 return module.exports.execute(btnInt, Number(amount));
               }
+
               await btnInt.update({ components: [] });
             });
 
@@ -210,7 +208,9 @@ module.exports = {
         if (reason === "time" && !settled) {
           activeDice.delete(userId);
           clearTimeout(failSafe);
+
           await User.updateOne({ userId }, { $inc: { gold: amount } });
+
           await interaction
             .editReply({
               content: "⏲️ **Timed Out:** Bet refunded.",
