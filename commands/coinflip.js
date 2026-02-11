@@ -113,12 +113,8 @@ module.exports = {
         // 3. SECURE SETTLEMENT
         setTimeout(async () => {
           try {
-            const won = Math.random() < 0.5; // Pure 50/50
-            const resultSide = won
-              ? choice
-              : choice === "heads"
-                ? "tails"
-                : "heads";
+            const resultSide = Math.random() < 0.5 ? "heads" : "tails";
+            const won = resultSide === choice;
 
             const payout = won ? Math.floor(amount * 1.75) : 0;
             const netChange = won ? payout - amount : -amount;
