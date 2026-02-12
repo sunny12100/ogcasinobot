@@ -257,6 +257,25 @@ const commands = [
     .setName("mod-stats") // <--- NEW COMMAND ADDED HERE
     .setDescription("Admin: View moderator workload and activity logs")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName("cashout")
+    .setDescription(
+      "Admin: Send gold from Master Account via Territorial.io API",
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption((opt) =>
+      opt
+        .setName("account_id")
+        .setDescription("The target game Account ID (Example: AWwh_)")
+        .setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Amount of gold to send")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
