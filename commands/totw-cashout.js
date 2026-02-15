@@ -5,11 +5,14 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ComponentType,
-  PermissionFlagsBits, // Added for visibility control
+  PermissionFlagsBits,
 } = require("discord.js");
 
 let isTreasuryLocked = false;
 
+/**
+ * Robust Iterative Fetch with Retry, Timeout, and Backoff
+ */
 async function fetchWithRetry(url, options, retries = 1) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -25,8 +28,9 @@ async function fetchWithRetry(url, options, retries = 1) {
         (response.status >= 400 &&
           response.status < 500 &&
           response.status !== 429)
-      )
+      ) {
         return response;
+      }
       if (attempt === retries) return response;
     } catch (err) {
       clearTimeout(timeoutId);
@@ -39,7 +43,6 @@ async function fetchWithRetry(url, options, retries = 1) {
 module.exports = {
   name: "totw-cashout",
   description: "TOTW Treasury: Send gold from the totw bank",
-  // This line helps hide it from people without specific permissions in some setups
   default_member_permissions: PermissionFlagsBits.SendMessages,
 
   async execute(interaction) {
@@ -52,8 +55,6 @@ module.exports = {
     // --- CONFIGURATION ---
     const DEPT_ROLE_ID = "1434948030842405045";
     const LOG_CHANNEL_ID = "1472518058445635694";
-
-    // Fix: Turned into an Array for multiple channel support
     const VALID_CHANNEL_IDS = ["1435117294454833212", "1434947454289313902"];
 
     const DEPT_GAME_ID = process.env.TOTW_ACCOUNT_NAME;
@@ -61,22 +62,19 @@ module.exports = {
     const MAX_TRANSFER = 1500;
     const uid = interaction.id;
 
-    // 1. DUAL PERMISSION CHECK (Channel & Role)
+    // 1. DUAL PERMISSION CHECK
     if (!VALID_CHANNEL_IDS.includes(interaction.channelId)) {
       return interaction.reply({
-        content: `❌ This command cannot be used in this channel.`,
+        content: "❌ This command cannot be used here.",
         ephemeral: true,
       });
     }
-
     if (!interaction.member.roles.cache.has(DEPT_ROLE_ID)) {
       return interaction.reply({
-        content:
-          "❌ **Access Denied:** You need the TOTW role to see/use this.",
+        content: "❌ **Access Denied:** Missing TOTW role.",
         ephemeral: true,
       });
     }
-
     if (!DEPT_GAME_ID || !DEPT_GAME_PASS)
       return interaction.reply({
         content: "🚨 Config Error.",
@@ -105,20 +103,23 @@ module.exports = {
       });
     }
 
-    // 3. UI & COLLECTOR
+    // --- RESTORED CONFIRMATION UI ---
     const confirmEmbed = new EmbedBuilder()
-      .setTitle("🏦 TOTW Treasury: Authorization")
+      .setTitle("📂 TOTW Bank: Pending Transfer")
       .setColor(0x2b2d31)
-      .setDescription(`From \`${DEPT_GAME_ID}\` to \`${targetID}\``)
+      .setDescription(
+        `Authorizing transfer from **${DEPT_GAME_ID}** to **${targetID}**.`,
+      )
       .addFields({
         name: "💰 Amount",
         value: `\`${amount.toLocaleString()}\` Gold`,
+        inline: true,
       });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`confirm_${uid}`)
-        .setLabel("Confirm")
+        .setLabel("Confirm & Send")
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
         .setCustomId(`cancel_${uid}`)
@@ -145,7 +146,7 @@ module.exports = {
       if (i.customId === `cancel_${uid}`) {
         collector.stop("cancelled");
         return i.update({
-          content: "❌ **Aborted.**",
+          content: "❌ **Transfer Cancelled by User.**",
           embeds: [],
           components: [],
         });
@@ -154,7 +155,7 @@ module.exports = {
       isTreasuryLocked = true;
       await i.deferUpdate();
       await interaction.editReply({
-        content: "📡 **Processing...**",
+        content: "📡 **Processing TOTW Payout...**",
         components: [],
         embeds: [],
       });
@@ -180,33 +181,54 @@ module.exports = {
           .catch(() => ({ status: "json_parse_error" }));
         const isSuccess = data.status === "ok" || data.status === "success";
 
+        // --- RESTORED LOG UI ---
         const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
-        if (logChannel?.isTextBased()) {
+        if (logChannel?.isTextBased() && isSuccess) {
           const logEmbed = new EmbedBuilder()
-            .setTitle(isSuccess ? "✅ Payout Success" : "🚨 Payout Failed")
-            .setColor(isSuccess ? 0x2ecc71 : 0xe74c3c)
+            .setTitle("🏦 TOTW Treasury: Transaction Log")
+            .setColor(0x3498db)
             .addFields(
               {
-                name: "Staff",
-                value: `<@${interaction.user.id}>`,
+                name: "👤 Executed By",
+                value: `${interaction.user.tag} (${interaction.user.id})`,
+              },
+              { name: "🎯 Recipient", value: `\`${targetID}\``, inline: true },
+              {
+                name: "💰 Amount",
+                value: `\`${amount.toLocaleString()}\` Gold`,
                 inline: true,
               },
-              { name: "Target", value: `\`${targetID}\``, inline: true },
-              { name: "Amount", value: `\`${amount}\``, inline: true },
+              {
+                name: "📂 Source Vault",
+                value: `\`${DEPT_GAME_ID}\``,
+                inline: true,
+              },
             )
-            .setTimestamp();
+            .setTimestamp()
+            .setFooter({ text: "TOTW Department Payout Log" });
           await logChannel.send({ embeds: [logEmbed] }).catch(() => null);
         }
 
-        await interaction.editReply({
-          content: isSuccess
-            ? "✅ **Complete.**"
-            : `❌ **Failed:** ${data.status}`,
-        });
+        // Final Result Display
+        const resultEmbed = new EmbedBuilder()
+          .setTitle(isSuccess ? "✅ TOTW Payout Sent" : "⚠️ API Error")
+          .setColor(isSuccess ? 0x2ecc71 : 0xe74c3c)
+          .addFields(
+            { name: "Recipient", value: `\`${targetID}\``, inline: true },
+            { name: "Amount", value: `\`${amount}\``, inline: true },
+            {
+              name: "API Status",
+              value: `\`${data.status || "Error"}\``,
+              inline: true,
+            },
+          )
+          .setFooter({ text: `Auth by: ${interaction.user.tag}` });
+
+        await interaction.editReply({ content: null, embeds: [resultEmbed] });
         collector.stop("finished");
       } catch (err) {
         await interaction.editReply({
-          content: `🚨 **Error:** ${err.message}`,
+          content: `🚨 **Critical Error:** ${err.message}`,
         });
       } finally {
         isTreasuryLocked = false;
@@ -216,7 +238,11 @@ module.exports = {
     collector.on("end", async (_, reason) => {
       if (reason === "time" && !isTreasuryLocked) {
         await interaction
-          .editReply({ content: "⌛ **Expired.**", components: [], embeds: [] })
+          .editReply({
+            content: "⌛ **Transaction Session Expired.**",
+            components: [],
+            embeds: [],
+          })
           .catch(() => null);
       }
     });
