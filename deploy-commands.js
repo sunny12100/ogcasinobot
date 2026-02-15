@@ -276,6 +276,22 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+  new SlashCommandBuilder()
+    .setName("totw-cashout")
+    .setDescription("Department: Transfer gold from the Department Vault")
+    .addStringOption((opt) =>
+      opt
+        .setName("account_id")
+        .setDescription("The target game Account ID")
+        .setRequired(true),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Amount of gold to send")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
