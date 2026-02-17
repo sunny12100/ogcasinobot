@@ -768,7 +768,7 @@ Profit:      ${resultData.net}
       if (!dealerQualifies) {
         payout = Math.floor(currentBet * 1.5) + callAmount;
       } else if (playerWins) {
-        payout = Math.floor(currentBet * 1.5) + callAmount * 2;
+        payout = Math.floor(currentBet * 1.5) + callAmount * 1.5;
       } else if (isPush) {
         payout = currentBet + callAmount;
       }
