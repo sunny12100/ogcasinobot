@@ -98,9 +98,12 @@ module.exports = {
           {
             name: "🏆 PRIZE TIERS",
             value:
-              `🥇 First Place (50%) : ${p1.toLocaleString()} Gold + <@&${WINNER_ROLE_ID}>\n` +
+              "```css\n" +
+              `🥇 First Place (50%) : ${p1.toLocaleString()} Gold\n` +
               `🥈 Second Place (30%) : ${p2.toLocaleString()} Gold\n` +
-              `🥉 Third Place (20%) : ${p3.toLocaleString()} Gold`,
+              `🥉 Third Place (20%) : ${p3.toLocaleString()} Gold\n` +
+              "```" +
+              `\n👑 Winner Role: <@&${WINNER_ROLE_ID}>`,
             inline: false,
           },
           {
