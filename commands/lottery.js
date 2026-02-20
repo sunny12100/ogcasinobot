@@ -99,7 +99,7 @@ module.exports = {
             name: "🏆 PRIZE TIERS",
             value:
               "```css\n" +
-              `🥇 First Place (50%) : ${p1.toLocaleString()} Gold + <@&${WINNER_ROLE_ID}>\n` +
+              `🥇 First Place (50%) : ${p1.toLocaleString()} Gold + <@${WINNER_ROLE_ID}>\n` +
               `🥈 Second Place (30%) : ${p2.toLocaleString()} Gold\n` +
               `🥉 Third Place (20%) : ${p3.toLocaleString()} Gold\n` +
               "```",
