@@ -292,6 +292,24 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+  new SlashCommandBuilder()
+    .setName("start-lottery")
+    .setDescription("Admin: Start a new casino lottery event")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addIntegerOption((opt) =>
+      opt
+        .setName("sponsor")
+        .setDescription("Gold amount provided by the casino")
+        .setRequired(true)
+        .setMinValue(0),
+    )
+    .addIntegerOption((opt) =>
+      opt
+        .setName("duration")
+        .setDescription("Duration of the lottery in minutes")
+        .setRequired(true)
+        .setMinValue(1),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
