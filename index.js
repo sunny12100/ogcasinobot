@@ -11,12 +11,22 @@ const {
   TextInputStyle,
   ActionRowBuilder,
   EmbedBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  TextChannel,
+  NewsChannel,
+  ThreadChannel,
 } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
 const mongoose = require("mongoose");
+
 const { startTracking } = require("./checkTransactions");
 const User = require("./models/User");
+const Lottery = require("./models/Lottery");
+const LotteryTicket = require("./models/LotteryTicket");
+const { buildLotteryEmbed } = require("./utils/lotteryEmbed");
+const { logToAudit } = require("./utils/logger");
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
@@ -41,13 +51,92 @@ for (const file of commandFiles) {
   client.commands.set(command.name, command);
 }
 
-client.once(Events.ClientReady, () => {
+// --- LOTTERY RECOVERY SYSTEM (RESTART + DELETION SAFE) ---
+async function recoverLotteries() {
+  try {
+    const activeLotteries = await Lottery.find({ isClosed: false });
+    if (!activeLotteries.length) return;
+
+    console.log(`🎰 Recovering ${activeLotteries.length} active lottery(s)...`);
+
+    for (const lottery of activeLotteries) {
+      try {
+        const guild = await client.guilds
+          .fetch(lottery.guildId)
+          .catch(() => null);
+        if (!guild) {
+          console.log(`⚠️ Guild not found: ${lottery.guildId}`);
+          continue;
+        }
+
+        const channel = await guild.channels
+          .fetch(lottery.channelId)
+          .catch(() => null);
+        if (
+          !channel ||
+          !(
+            channel instanceof TextChannel ||
+            channel instanceof NewsChannel ||
+            channel instanceof ThreadChannel
+          )
+        ) {
+          console.log(`⚠️ Invalid or non-text channel: ${lottery.channelId}`);
+          continue;
+        }
+
+        const embed = await buildLotteryEmbed(lottery.messageId, guild);
+        if (!embed) {
+          console.log(
+            `⚠️ Lottery embed not found for message: ${lottery.messageId}`,
+          );
+          continue;
+        }
+
+        const buttonRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("buy_ticket")
+            .setLabel("🎟️ Buy Ticket (250 Gold)")
+            .setStyle(ButtonStyle.Success),
+        );
+
+        let message;
+        try {
+          message = await channel.messages.fetch(lottery.messageId);
+          await message.edit({ embeds: [embed], components: [buttonRow] });
+        } catch {
+          message = await channel.send({
+            embeds: [embed],
+            components: [buttonRow],
+          });
+          await Lottery.updateOne(
+            { messageId: lottery.messageId },
+            { messageId: message.id },
+          );
+          console.log(
+            `♻️ Lottery message deleted. Reposted and recovered: ${message.id}`,
+          );
+        }
+      } catch (err) {
+        console.error("❌ Lottery Recovery Error:", err);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Failed to recover lotteries:", err);
+  }
+}
+
+// --- CLIENT READY ---
+client.once(Events.ClientReady, async () => {
   console.log(`✅ ${client.user.tag} is online!`);
   startTracking(client);
+
+  // Recover active lotteries on startup
+  await recoverLotteries();
 });
 
+// --- INTERACTIONS ---
 client.on(Events.InteractionCreate, async (interaction) => {
-  // 1. HANDLE SLASH COMMANDS
+  // --- Slash Commands ---
   if (interaction.isChatInputCommand()) {
     const userId = interaction.user.id;
     const now = Date.now();
@@ -69,6 +158,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
+
     try {
       await command.execute(interaction);
     } catch (error) {
@@ -85,19 +175,120 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  // 2. HANDLE BUTTON CLICKS
+  // --- Button Clicks ---
   if (interaction.isButton()) {
     try {
+      if (interaction.customId === "buy_ticket") {
+        const TICKET_PRICE = 250;
+        const LOTTERY_ROLE_ID = "1380456068685107301";
+
+        const lottery = await Lottery.findOne({
+          guildId: interaction.guild.id,
+          isClosed: false,
+        });
+        if (!lottery) {
+          return interaction.reply({
+            content: "🛑 No active lottery found.",
+            ephemeral: true,
+          });
+        }
+
+        if (Date.now() >= lottery.endTime) {
+          await Lottery.updateOne(
+            { messageId: lottery.messageId },
+            { isClosed: true },
+          );
+          return interaction.reply({
+            content: "🛑 Lottery has already ended.",
+            ephemeral: true,
+          });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const updatedUser = await User.findOneAndUpdate(
+          { userId: interaction.user.id, gold: { $gte: TICKET_PRICE } },
+          { $inc: { gold: -TICKET_PRICE } },
+          { new: true },
+        );
+
+        if (!updatedUser) {
+          return interaction.editReply({ content: "❌ Insufficient gold." });
+        }
+        // --- ADD AUDIT LOG HERE ---
+        await logToAudit(client, {
+          userId: interaction.user.id,
+          bet: TICKET_PRICE,
+          amount: -TICKET_PRICE, // negative because user spent gold
+          oldBalance: updatedUser.gold + TICKET_PRICE,
+          newBalance: updatedUser.gold,
+          reason: `Lottery Ticket Purchase [${lottery.messageId}]`,
+        }).catch(() => null);
+        const displayName =
+          interaction.user.globalName || interaction.user.username;
+
+        await Lottery.updateOne(
+          { messageId: lottery.messageId },
+          { $inc: { totalTickets: 1, poolBalance: TICKET_PRICE } },
+        );
+
+        await LotteryTicket.findOneAndUpdate(
+          { messageId: lottery.messageId, userId: interaction.user.id },
+          { $inc: { tickets: 1 }, $setOnInsert: { username: displayName } },
+          { upsert: true },
+        );
+
+        try {
+          const member = await interaction.guild.members.fetch(
+            interaction.user.id,
+          );
+          if (!member.roles.cache.has(LOTTERY_ROLE_ID)) {
+            await member.roles.add(LOTTERY_ROLE_ID);
+          }
+        } catch (e) {}
+
+        await interaction.editReply({
+          content: "🎫 Ticket purchased successfully!",
+        });
+
+        // Refresh embed
+        try {
+          const channel = await interaction.guild.channels.fetch(
+            lottery.channelId,
+          );
+          const msg = await channel.messages.fetch(lottery.messageId);
+          const embed = await buildLotteryEmbed(
+            lottery.messageId,
+            interaction.guild,
+          );
+
+          const buttonRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("buy_ticket")
+              .setLabel("🎟️ Buy Ticket (250 Gold)")
+              .setStyle(ButtonStyle.Success),
+          );
+
+          if (embed)
+            await msg
+              .edit({ embeds: [embed], components: [buttonRow] })
+              .catch(() => {});
+        } catch (e) {}
+      }
+
+      // --- Open Modals ---
       if (interaction.customId === "open_register_modal") {
         const modal = new ModalBuilder()
           .setCustomId("register_modal")
           .setTitle("Account Registration");
+
         const usernameInput = new TextInputBuilder()
           .setCustomId("ttio_username")
           .setLabel("Territorial.io Account ID")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("Enter your exact game Account ID (Example : AWwh_)")
           .setRequired(true);
+
         modal.addComponents(
           new ActionRowBuilder().addComponents(usernameInput),
         );
@@ -108,22 +299,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const modal = new ModalBuilder()
           .setCustomId("withdraw_modal")
           .setTitle("Withdraw Gold");
+
         const amountInput = new TextInputBuilder()
           .setCustomId("withdraw_amount")
           .setLabel("Amount to Withdraw (Min: 50)")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("e.g. 1000")
           .setRequired(true);
+
         const accountInput = new TextInputBuilder()
           .setCustomId("withdraw_account")
           .setLabel("Destination Account ID (Optional)")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("Leave blank to use your registered Account ID")
           .setRequired(false);
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(amountInput),
-          new ActionRowBuilder().addComponents(accountInput),
-        );
+
+        modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
+        modal.addComponents(new ActionRowBuilder().addComponents(accountInput));
+
         await interaction.showModal(modal);
       }
     } catch (err) {
@@ -131,12 +324,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  // 3. HANDLE MODAL SUBMISSIONS
+  // --- Modal Submissions ---
   if (interaction.isModalSubmit()) {
     const userId = interaction.user.id;
 
     if (interaction.customId === "register_modal") {
       const ttioName = interaction.fields.getTextInputValue("ttio_username");
+
       await User.findOneAndUpdate(
         { userId: userId },
         { ttio: ttioName, $setOnInsert: { gold: 0, verified: false } },
@@ -158,98 +352,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ephemeral: true,
       });
     }
-
-    if (interaction.customId === "withdraw_modal") {
-      const amountInput =
-        interaction.fields.getTextInputValue("withdraw_amount");
-      const amount = parseInt(amountInput);
-      const customAccount =
-        interaction.fields.getTextInputValue("withdraw_account");
-
-      if (isNaN(amount) || amount < 50) {
-        return interaction.reply({
-          content: "❌ **Withdrawal Failed:** Minimum withdrawal is `50` gold.",
-          ephemeral: true,
-        });
-      }
-
-      const userData = await User.findOne({ userId: userId });
-      if (!userData || !userData.verified) {
-        return interaction.reply({
-          content: "❌ You must be verified to withdraw.",
-          ephemeral: true,
-        });
-      }
-
-      if (userData.gold < amount) {
-        return interaction.reply({
-          content: `❌ **Insufficient Balance!** You only have \`${userData.gold.toLocaleString()}\` gold.`,
-          ephemeral: true,
-        });
-      }
-
-      const target = customAccount || userData.ttio || "Unknown";
-      const fee = Math.floor(amount * 0.03);
-      const receiveAmount = amount - fee;
-
-      userData.gold -= amount;
-      await userData.save();
-
-      // --- UNIFIED WITHDRAWAL UI (Matches Deposit Style) ---
-      const receiptEmbed = new EmbedBuilder()
-        .setTitle("📤 Withdrawal Request")
-        .setColor(0xe74c3c)
-        .setThumbnail(interaction.user.displayAvatarURL())
-        .addFields(
-          { name: "👤 User", value: `<@${userId}>`, inline: true },
-          { name: "🎮 Destination", value: `\`${target}\``, inline: true },
-          {
-            name: "💰 Total Deducted",
-            value: `\`${amount.toLocaleString()}\` Gold`,
-            inline: false,
-          },
-          {
-            name: "📉 Service Fee (3%)",
-            value: `\`${fee.toLocaleString()}\` Gold`,
-            inline: true,
-          },
-          {
-            name: "🎁 Net Payout",
-            value: `**${receiveAmount.toLocaleString()} Gold**`,
-            inline: true,
-          },
-        )
-        .setFooter({ text: `User ID: ${userId}` })
-        .setTimestamp();
-
-      // --- LOG TO CHANNEL ---
-      const logChannelId = process.env.LOG_CHANNEL_ID;
-      try {
-        const logChannel = await client.channels.fetch(logChannelId);
-        if (logChannel) {
-          await logChannel.send({
-            content: `🚨 **NEW WITHDRAWAL** from <@${userId}>`,
-            embeds: [receiptEmbed],
-          });
-        }
-      } catch (err) {
-        console.error("❌ Withdrawal Log Channel Error:", err);
-      }
-
-      // --- SEND DM ---
-      await interaction.user
-        .send({
-          content: "✅ Your withdrawal request has been submitted.",
-          embeds: [receiptEmbed],
-        })
-        .catch(() => null);
-
-      await interaction.reply({
-        content: `✅ **Request Sent!** You will receive **${receiveAmount.toLocaleString()}** gold shortly.`,
-        ephemeral: true,
-      });
-    }
   }
 });
 
+// --- LOGIN ---
 client.login(process.env.TOKEN);

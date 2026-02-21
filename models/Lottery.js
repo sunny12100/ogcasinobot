@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const lotterySchema = new mongoose.Schema(
   {
     messageId: { type: String, required: true, unique: true }, // lottery message
+    channelId: { type: String, required: true }, // 🔥 ADD THIS
     guildId: { type: String, required: true },
 
     poolBalance: { type: Number, default: 0 },
@@ -14,8 +15,10 @@ const lotterySchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
 lotterySchema.index(
   { guildId: 1, isClosed: 1 },
   { unique: true, partialFilterExpression: { isClosed: false } },
 );
+
 module.exports = mongoose.model("Lottery", lotterySchema);
