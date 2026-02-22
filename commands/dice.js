@@ -122,7 +122,7 @@ module.exports = {
               (choice === "lower" && userRoll < dealerRoll);
 
             // 1.75x payout
-            const payout = won ? Math.floor(amount * 1.75) : 0;
+            const payout = won ? Math.floor(amount * 1.9) : 0;
             const netChange = won ? payout - amount : -amount;
 
             const updatedUser = await User.findOneAndUpdate(

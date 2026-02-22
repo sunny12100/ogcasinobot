@@ -116,7 +116,7 @@ module.exports = {
             const resultSide = Math.random() < 0.5 ? "heads" : "tails";
             const won = resultSide === choice;
 
-            const payout = won ? Math.floor(amount * 1.75) : 0;
+            const payout = won ? Math.floor(amount * 1.9) : 0;
             const netChange = won ? payout - amount : -amount;
 
             const updatedUser = await User.findOneAndUpdate(
