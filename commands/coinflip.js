@@ -75,7 +75,7 @@ module.exports = {
         .setTitle("🪙 COINFLIP: HEADS OR TAILS?")
         .setColor(0x5865f2)
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side! Win a **1.75x** payout.`,
+          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side! Win a **1.9x** payout.`,
         );
 
       const msg = await interaction.editReply({
