@@ -310,6 +310,41 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+  new SlashCommandBuilder()
+    .setName("autoreact")
+    .setDescription("Manage automatic emoji reactions")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("Add a new keyword trigger")
+        .addStringOption((opt) =>
+          opt
+            .setName("keyword")
+            .setDescription("The word to watch for")
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("emoji")
+            .setDescription("The emoji or Emoji ID")
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("Remove a keyword trigger")
+        .addStringOption((opt) =>
+          opt
+            .setName("keyword")
+            .setDescription("The keyword to delete")
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("Show all registered triggers"),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
