@@ -13,31 +13,39 @@ const { logToAudit } = require("../utils/logger");
 
 module.exports = {
   name: "cashout",
-  description: "Admin: Sends gold from the Master Account to a game ID",
+  description: "Treasury: Sends gold from the Master Account to a game ID",
   async execute(interaction) {
     const MAX_CASHOUT = 5000;
 
-    // 2. PERMISSION & INPUT SANITIZATION
-    if (!interaction.member.permissions.has("Administrator")) {
+    // 🔒 ROLE-BASED ACCESS CONTROL (ONLY THIS ROLE CAN USE COMMAND)
+    const ALLOWED_ROLE_ID = "1475908523396300871"; // <-- PUT YOUR ROLE ID HERE
+
+    if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID)) {
       return interaction.reply({
-        content: "❌ Administrator perms required.",
+        content:
+          "❌ You are not authorized to use the treasury cashout command.",
         ephemeral: true,
       });
     }
 
+    // 2. INPUT SANITIZATION
     const targetTTIO = interaction.options.getString("account_id")?.trim();
     const amount = interaction.options.getInteger("amount");
 
-    if (!targetTTIO)
+    if (!targetTTIO) {
       return interaction.reply({
         content: "❌ Invalid account ID.",
         ephemeral: true,
       });
-    if (amount <= 0)
+    }
+
+    if (!amount || amount <= 0) {
       return interaction.reply({
-        content: "❌ Amount must be positive.",
+        content: "❌ Amount must be a positive number.",
         ephemeral: true,
       });
+    }
+
     if (amount > MAX_CASHOUT) {
       return interaction.reply({
         content: `❌ **Security Alert:** Transfer exceeds the limit of ${MAX_CASHOUT.toLocaleString()} gold.`,
@@ -56,7 +64,8 @@ module.exports = {
         name: "💰 Amount",
         value: `\`${amount.toLocaleString()}\` Gold`,
         inline: true,
-      });
+      })
+      .setFooter({ text: `Requested by ${interaction.user.tag}` });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -94,9 +103,11 @@ module.exports = {
       }
 
       isProcessing = true;
+
       await i.update({
         content: "📡 **Executing API Transaction...**",
         components: [],
+        embeds: [],
       });
 
       // 4. NETWORK TIMEOUT & ABORT LOGIC
@@ -119,10 +130,12 @@ module.exports = {
           },
         );
 
-        if (!apiResponse.ok)
+        if (!apiResponse.ok) {
           throw new Error(`HTTP Error: ${apiResponse.status}`);
+        }
 
         const rawText = await apiResponse.text();
+
         let data;
         try {
           data = JSON.parse(rawText);
@@ -132,8 +145,8 @@ module.exports = {
 
         const isSuccess = data.status === "ok" || data.status === "success";
 
+        // DATABASE & AUDIT LOGGING ON SUCCESS
         if (isSuccess) {
-          // DATABASE & AUDIT LOGGING
           await AuditLog.create({
             modId: interaction.user.id,
             modTag: interaction.user.tag,
@@ -154,25 +167,32 @@ module.exports = {
         }
 
         // 5. EMBED FIELD OVERFLOW PROTECTION
-        const apiDump = JSON.stringify(data).slice(0, 950);
+        const apiDump = JSON.stringify(data, null, 2).slice(0, 950);
 
         const proofEmbed = new EmbedBuilder()
           .setTitle(isSuccess ? "✅ CASHOUT DISPATCHED" : "⚠️ API REJECTED")
           .setColor(isSuccess ? 0x2ecc71 : 0xe74c3c)
           .addFields(
-            { name: "Recipient", value: `\`${targetTTIO}\``, inline: true },
             {
-              name: "Sent",
-              value: `\`${amount.toLocaleString()}\``,
+              name: "Recipient",
+              value: `\`${targetTTIO}\``,
               inline: true,
             },
-            { name: "API Reference", value: `\`\`\`json\n${apiDump}\`\`\`` },
+            {
+              name: "Sent",
+              value: `\`${amount.toLocaleString()}\` Gold`,
+              inline: true,
+            },
+            {
+              name: "API Reference",
+              value: `\`\`\`json\n${apiDump}\n\`\`\``,
+            },
           )
           .setTimestamp();
 
         await interaction.editReply({
           content: isSuccess
-            ? `✨ **Success!** Gold dispatched.`
+            ? "✨ **Success!** Gold dispatched."
             : "❌ Transaction rejected by game server.",
           embeds: [proofEmbed],
         });
@@ -181,15 +201,18 @@ module.exports = {
       } catch (err) {
         const errorMsg =
           err.name === "AbortError" ? "Network Timeout (15s)" : err.message;
+
         console.error("Critical API Failure:", errorMsg);
 
         await interaction.editReply({
           content: `🚨 **API Failure:** ${errorMsg}`,
           embeds: [],
+          components: [],
         });
+
         collector.stop("error");
       } finally {
-        // 🛡️ MEMORY SAFETY: Always clear the timeout regardless of try/catch result
+        // 🛡️ MEMORY SAFETY
         clearTimeout(timeoutId);
       }
     });
