@@ -57,7 +57,7 @@ module.exports = {
           "> **Example:** Withdraw 1,000 gold → Receive 970 gold.\n\n" +
           "# ⚠️ Important Note\n" +
           "Withdrawals are processed manually. Please allow up to **24 hours** for delivery.\n\n" +
-          "**If you have not received your gold after 24 hours, please ping a <@&930302959668056135> for assistance.**",
+          "**If you have not received your gold after 24 hours, please ping a <@&1475908523396300871> for assistance.**",
       )
       .setColor(0x3498db)
       .setFooter({
