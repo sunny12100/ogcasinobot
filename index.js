@@ -397,7 +397,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // --- AUTO-REACTION LISTENER ---
-// --- AUTO-REACTION LISTENER ---
 client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.guild) return;
 
@@ -405,13 +404,16 @@ client.on("messageCreate", async (message) => {
   const triggerCache = getTriggerCache();
 
   for (const item of triggerCache) {
-    if (content.includes(item.keyword.toLowerCase())) {
+    const keyword = item.keyword.toLowerCase();
+
+    // Match whole word only (no oggg, gogogo, dog)
+    const regex = new RegExp(`\\b${keyword}\\b`, "i");
+
+    if (regex.test(content)) {
       try {
-        // Check if it's a numeric ID (Custom Emoji)
         const isCustomEmoji = /^\d+$/.test(item.emojiId);
 
         if (isCustomEmoji) {
-          // Verify the bot can actually see this emoji
           const emoji = client.emojis.cache.get(item.emojiId);
           if (emoji) {
             await message.react(item.emojiId);
@@ -421,13 +423,10 @@ client.on("messageCreate", async (message) => {
             );
           }
         } else {
-          // It's a standard Unicode emoji (e.g., "🔥")
           await message.react(item.emojiId);
         }
       } catch (err) {
-        // Silently fail if the emoji is invalid or bot lacks perms
         if (err.code !== 10014) {
-          // Ignore "Unknown Emoji" error code
           console.error(`❌ React failed for "${item.keyword}":`, err.message);
         }
       }
