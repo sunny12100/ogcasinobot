@@ -124,7 +124,7 @@ module.exports = {
 
         // --- RIGGED LOGIC (30% Win / 70% Loss) ---
         const winChance = Math.random();
-        const shouldWin = winChance < 0.6; // 60% Probability
+        const shouldWin = winChance < 0.4; // 60% Probability
 
         let userIndex;
 
