@@ -9,7 +9,7 @@ const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
 
 const activeHighLow = new Set();
-const MAX_BET = 500;
+const MAX_BET = 500; // As per your current limit
 
 module.exports = {
   name: "highlow",
@@ -21,7 +21,7 @@ module.exports = {
     if (!amount || amount <= 0 || amount > MAX_BET) {
       return interaction
         .reply({
-          content: "❌ Invalid bet amount (1 - 1M gold).",
+          content: `❌ Invalid bet amount (1 - ${MAX_BET.toLocaleString()} gold).`,
           ephemeral: true,
         })
         .catch(() => null);
@@ -121,9 +121,42 @@ module.exports = {
         settled = true;
 
         const choice = i.customId;
-        const userIndex = Math.floor(Math.random() * cards.length);
-        const userCard = cards[userIndex];
 
+        // --- RIGGED LOGIC (30% Win / 70% Loss) ---
+        const winChance = Math.random();
+        const shouldWin = winChance < 0.3; // 30% Probability
+
+        let userIndex;
+
+        if (shouldWin) {
+          // Force a winning card
+          if (choice === "higher") {
+            // Must be index > dealerIndex. If Dealer is Ace, user loses (house edge)
+            userIndex =
+              dealerIndex === cards.length - 1
+                ? dealerIndex
+                : Math.floor(Math.random() * (cards.length - 1 - dealerIndex)) +
+                  dealerIndex +
+                  1;
+          } else {
+            // Must be index < dealerIndex. If Dealer is 2, user loses (house edge)
+            userIndex =
+              dealerIndex === 0 ? 0 : Math.floor(Math.random() * dealerIndex);
+          }
+        } else {
+          // Force a losing card (includes ties)
+          if (choice === "higher") {
+            // Card is same or lower
+            userIndex = Math.floor(Math.random() * (dealerIndex + 1));
+          } else {
+            // Card is same or higher
+            userIndex =
+              Math.floor(Math.random() * (cards.length - dealerIndex)) +
+              dealerIndex;
+          }
+        }
+
+        const userCard = cards[userIndex];
         const won =
           (choice === "higher" && userIndex > dealerIndex) ||
           (choice === "lower" && userIndex < dealerIndex);
@@ -131,6 +164,7 @@ module.exports = {
         const payout = won ? Math.floor(amount * 1.5) : 0;
         const netChange = won ? payout - amount : -amount;
 
+        // Display Shuffling Animation
         await i.update({
           embeds: [
             new EmbedBuilder()
@@ -143,6 +177,7 @@ module.exports = {
           components: [],
         });
 
+        // Delay to show animation
         setTimeout(async () => {
           try {
             const updatedUser = await User.findOneAndUpdate(
@@ -151,19 +186,11 @@ module.exports = {
               { new: true },
             );
 
-            if (!updatedUser)
-              throw new Error("Database update failed during payout");
-
             const resultEmbed = new EmbedBuilder()
               .setTitle(won ? "🎉 CORRECT!" : "💀 WRONG")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Dealer: **${dealerCard}** vs You: **${userCard}**
-Result: You were **${won ? "Right" : "Wrong"}**!
-
-💰 **Payout:** \`${won ? payout.toLocaleString() : "0"}\` gold
-📈 **Net Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold
-🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+                `### Dealer: **${dealerCard}** vs You: **${userCard}**\nResult: You were **${won ? "Right" : "Wrong"}**!\n\n💰 **Payout:** \`${won ? payout.toLocaleString() : "0"}\` gold\n📈 **Net Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
               );
 
             const repeatRow = new ActionRowBuilder().addComponents(
@@ -189,9 +216,7 @@ Result: You were **${won ? "Right" : "Wrong"}**!
             });
 
             endCollector.on("collect", async (btnInt) => {
-              if (btnInt.user.id !== userId)
-                return btnInt.reply({ content: "Not yours!", ephemeral: true });
-
+              if (btnInt.user.id !== userId) return;
               endCollector.stop("replay");
 
               if (btnInt.customId === "hl_rep") {
@@ -200,7 +225,6 @@ Result: You were **${won ? "Right" : "Wrong"}**!
                 await btnInt.deferUpdate();
                 return module.exports.execute(btnInt, Number(amount));
               }
-
               await btnInt.update({ components: [] });
             });
 
@@ -214,8 +238,6 @@ Result: You were **${won ? "Right" : "Wrong"}**!
             });
           } catch (settleErr) {
             console.error("[HighLow Settlement Error]", settleErr);
-
-            // Emergency refund (loss-safe bias)
             await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
               () => null,
             );
@@ -232,9 +254,7 @@ Result: You were **${won ? "Right" : "Wrong"}**!
         if (reason === "time" && !settled) {
           activeHighLow.delete(userId);
           clearTimeout(failSafe);
-
           await User.updateOne({ userId }, { $inc: { gold: amount } });
-
           await interaction
             .editReply({
               content: "⏲️ **Timed Out:** Bet refunded.",
