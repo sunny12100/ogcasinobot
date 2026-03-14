@@ -13,7 +13,7 @@ const activeCoinflip = new Set();
 const MAX_BET = 1000;
 
 function randomFloat() {
-  crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
+  return crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
 }
 module.exports = {
   name: "coinflip",
