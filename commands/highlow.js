@@ -101,7 +101,7 @@ module.exports = {
         .setDescription(
           `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nDealer Card: **[ ${dealerCard} ]**\nWill the next card be **Higher** or **Lower**?`,
         )
-        .setFooter({ text: "Win Chance: 47.5% • Payout: 2×" });
+        .setFooter({ text: "Payout: 2×" });
 
       const msg = await interaction.editReply({
         embeds: [embed],
