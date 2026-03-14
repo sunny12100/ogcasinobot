@@ -18,6 +18,7 @@ function randomFloat() {
 
 module.exports = {
   name: "highlow",
+
   async execute(interaction, repeatAmount = null) {
     const userId = interaction.user.id;
     const amount = repeatAmount ?? interaction.options?.getInteger?.("amount");
@@ -99,9 +100,13 @@ module.exports = {
         .setTitle("🃏 HIGH-LOW")
         .setColor(0x5865f2)
         .setDescription(
-          `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nDealer Card: **[ ${dealerCard} ]**\nWill the next card be **Higher** or **Lower**?`,
+          `💰 **Bet:** \`${amount.toLocaleString()}\` gold
+
+Dealer Card: **[ ${dealerCard} ]**
+
+Will the next card be **Higher** or **Lower**?`,
         )
-        .setFooter({ text: "Payout: 2×" });
+        .setFooter({ text: "Payout: 2× | Tie = Push" });
 
       const msg = await interaction.editReply({
         embeds: [embed],
@@ -163,12 +168,34 @@ module.exports = {
 
             const userCard = cards[userIndex];
 
-            const won =
-              (choice === "higher" && userIndex > dealerIndex) ||
-              (choice === "lower" && userIndex < dealerIndex);
+            const isTie = userIndex === dealerIndex;
 
-            const payout = won ? amount * 2 : 0;
-            const netChange = won ? amount : -amount;
+            const won =
+              !isTie &&
+              ((choice === "higher" && userIndex > dealerIndex) ||
+                (choice === "lower" && userIndex < dealerIndex));
+
+            let payout = 0;
+            let netChange = 0;
+            let title = "";
+            let color = 0;
+
+            if (isTie) {
+              payout = amount;
+              netChange = 0;
+              title = "🤝 PUSH (TIE)";
+              color = 0xf1c40f;
+            } else if (won) {
+              payout = amount * 2;
+              netChange = amount;
+              title = "🎉 YOU WON!";
+              color = 0x2ecc71;
+            } else {
+              payout = 0;
+              netChange = -amount;
+              title = "💀 HOUSE WINS";
+              color = 0xe74c3c;
+            }
 
             const updatedUser = await User.findOneAndUpdate(
               { userId },
@@ -177,12 +204,13 @@ module.exports = {
             );
 
             const resultEmbed = new EmbedBuilder()
-              .setTitle(won ? "🎉 YOU WON!" : "💀 HOUSE WINS")
-              .setColor(won ? 0x2ecc71 : 0xe74c3c)
+              .setTitle(title)
+              .setColor(color)
               .setDescription(
-                `Dealer: **${dealerCard}**\nYour Card: **${userCard}**
+                `Dealer: **${dealerCard}**
+Your Card: **${userCard}**
 
-Result: **${won ? "Correct!" : "Wrong!"}**
+Result: **${isTie ? "Push" : won ? "Correct!" : "Wrong!"}**
 
 💰 Change: \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\`
 🏦 Balance: \`${updatedUser.gold.toLocaleString()}\``,
