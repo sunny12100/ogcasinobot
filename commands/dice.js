@@ -87,9 +87,7 @@ module.exports = {
         .setColor(0x5865f2)
         .setDescription(
           `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nChoose **Higher** or **Lower**.\nWin pays **2×**`,
-        )
-        .setFooter({ text: "House Edge: 5%" });
-
+        );
       const msg = await interaction.editReply({
         embeds: [initialEmbed],
         components: [row],
