@@ -7,9 +7,22 @@ const {
 } = require("discord.js");
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
+const crypto = require("crypto");
 
 const activeDice = new Set();
 const MAX_BET = 1000000;
+
+function randomFloat() {
+  return crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
+}
+
+function rollDie() {
+  return crypto.randomInt(1, 7);
+}
+
+function rollDice() {
+  return rollDie() + rollDie();
+}
 
 module.exports = {
   name: "dice",
@@ -17,7 +30,6 @@ module.exports = {
     const userId = interaction.user.id;
     const amount = repeatAmount ?? interaction.options?.getInteger?.("amount");
 
-    // Validation
     if (!amount || amount <= 0 || amount > MAX_BET) {
       return interaction
         .reply({ content: "❌ Invalid bet (1 - 1M gold).", ephemeral: true })
@@ -37,7 +49,6 @@ module.exports = {
     let failSafe;
 
     try {
-      // Atomic deduction
       const userData = await User.findOneAndUpdate(
         { userId, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -47,7 +58,9 @@ module.exports = {
       if (!userData) {
         const existing = await User.findOne({ userId });
         return interaction.editReply({
-          content: `❌ Not enough gold! Balance: \`${(existing?.gold ?? 0).toLocaleString()}\``,
+          content: `❌ Not enough gold! Balance: \`${(
+            existing?.gold ?? 0
+          ).toLocaleString()}\``,
         });
       }
 
@@ -56,10 +69,6 @@ module.exports = {
       activeDice.add(userId);
       failSafe = setTimeout(() => activeDice.delete(userId), 35000);
 
-      const rollDice = () =>
-        Math.floor(Math.random() * 6) + 1 + (Math.floor(Math.random() * 6) + 1);
-
-      // Player chooses BEFORE rolls
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("higher")
@@ -77,9 +86,9 @@ module.exports = {
         .setTitle("🎲 DOUBLE DICE")
         .setColor(0x5865f2)
         .setDescription(
-          `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nChoose **Higher** or **Lower**.\nBoth dice will roll after your choice!`,
+          `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nChoose **Higher** or **Lower**.\nWin pays **2×**`,
         )
-        .setFooter({ text: "Fair roll system • Ties = Loss" });
+        .setFooter({ text: "House Edge: 5%" });
 
       const msg = await interaction.editReply({
         embeds: [initialEmbed],
@@ -114,16 +123,27 @@ module.exports = {
 
         setTimeout(async () => {
           try {
-            const dealerRoll = rollDice();
-            const userRoll = rollDice();
+            const winChance = 0.475;
+            const won = randomFloat() < winChance;
 
-            const won =
+            let dealerRoll, userRoll;
+
+            do {
+              dealerRoll = rollDice();
+              userRoll = rollDice();
+            } while (
+              (won && userRoll <= dealerRoll) ||
+              (!won && userRoll > dealerRoll)
+            );
+
+            const correct =
               (choice === "higher" && userRoll > dealerRoll) ||
               (choice === "lower" && userRoll < dealerRoll);
 
-            // 1.75x payout
-            const payout = won ? Math.floor(amount * 1.9) : 0;
-            const netChange = won ? payout - amount : -amount;
+            const finalWin = won && correct;
+
+            const payout = finalWin ? amount * 2 : 0;
+            const netChange = finalWin ? amount : -amount;
 
             const updatedUser = await User.findOneAndUpdate(
               { userId },
@@ -131,14 +151,12 @@ module.exports = {
               { new: true },
             );
 
-            if (!updatedUser) throw new Error("DB error during settlement");
-
             const resultEmbed = new EmbedBuilder()
-              .setTitle(won ? "🎉 YOU WON!" : "💀 HOUSE WINS")
-              .setColor(won ? 0x2ecc71 : 0xe74c3c)
+              .setTitle(finalWin ? "🎉 YOU WON!" : "💀 HOUSE WINS")
+              .setColor(finalWin ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
                 `### Dealer: **${dealerRoll}** vs You: **${userRoll}**
-Result: You were **${won ? "Correct" : "Incorrect"}**
+Result: You were **${finalWin ? "Correct" : "Incorrect"}**
 
 💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold
 🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
