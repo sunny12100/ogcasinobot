@@ -7,10 +7,14 @@ const {
 } = require("discord.js");
 const User = require("../models/User");
 const { logToAudit } = require("../utils/logger");
+const crypto = require("crypto");
 
 const activeCoinflip = new Set();
-const MAX_BET = 1000000;
+const MAX_BET = 1000;
 
+function randomFloat() {
+  crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
+}
 module.exports = {
   name: "coinflip",
   async execute(interaction, repeatAmount = null) {
@@ -75,7 +79,7 @@ module.exports = {
         .setTitle("🪙 COINFLIP: HEADS OR TAILS?")
         .setColor(0x5865f2)
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side! Win a **1.9x** payout.`,
+          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side! Win a **2x** payout.`,
         );
 
       const msg = await interaction.editReply({
@@ -111,12 +115,20 @@ module.exports = {
         });
 
         // 3. SECURE SETTLEMENT
+
         setTimeout(async () => {
           try {
-            const resultSide = Math.random() < 0.5 ? "heads" : "tails";
-            const won = resultSide === choice;
+            const roll = randomFloat();
+            const winChance = 0.475; // 47.5% win chance
 
-            const payout = won ? Math.floor(amount * 1.9) : 0;
+            const won = roll < winChance;
+            const resultSide = won
+              ? choice
+              : choice === "heads"
+                ? "tails"
+                : "heads";
+
+            const payout = won ? Math.floor(amount * 2) : 0;
             const netChange = won ? payout - amount : -amount;
 
             const updatedUser = await User.findOneAndUpdate(
