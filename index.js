@@ -433,6 +433,51 @@ client.on("messageCreate", async (message) => {
     }
   }
 });
+// Run every 5 minutes to clean up expired passes
+setInterval(async () => {
+  try {
+    const now = new Date();
+
+    // 1. Find all users whose pass has expired but still have 'hasOgPass' set to true
+    const expiredUsers = await User.find({
+      hasOgPass: true,
+      ogPassExpiry: { $lt: now },
+    });
+
+    if (expiredUsers.length === 0) return;
+
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const PASS_ROLE_ID = "YOUR_ROLE_ID_HERE"; // Replace with your actual Role ID
+
+    for (const user of expiredUsers) {
+      const member = await guild.members.fetch(user.userId).catch(() => null);
+
+      if (member) {
+        // Remove the role in Discord
+        await member.roles
+          .remove(PASS_ROLE_ID)
+          .catch((err) => console.error(`Failed to remove role: ${err}`));
+
+        // Optional: Send a polite DM
+        await member
+          .send(
+            "🎫 **Your OG Pass has expired.** Hope you enjoyed the VIP Lounge!",
+          )
+          .catch(() => null);
+      }
+
+      // Update the database so we don't check them again
+      await User.updateOne(
+        { userId: user.userId },
+        { $set: { hasOgPass: false, ogPassExpiry: null } },
+      );
+
+      console.log(`[OG PASS] Removed expired pass for ${user.userId}`);
+    }
+  } catch (error) {
+    console.error("[OG PASS ERROR] Cleanup task failed:", error);
+  }
+}, 300000); // 300,000ms = 5 minutes
 
 // --- LOGIN ---
 client.login(process.env.TOKEN);
