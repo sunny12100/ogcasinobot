@@ -262,7 +262,7 @@ const commands = [
     .setDescription(
       "Admin: Send gold from Master Account via Territorial.io API",
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(0)
     .addStringOption((opt) =>
       opt
         .setName("account_id")
@@ -313,7 +313,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("autoreact")
     .setDescription("Manage automatic emoji reactions")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("add")

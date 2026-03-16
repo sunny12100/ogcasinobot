@@ -1,6 +1,5 @@
 const {
   SlashCommandBuilder,
-  PermissionFlagsBits,
   EmbedBuilder,
   MessageFlags,
 } = require("discord.js");
@@ -8,12 +7,13 @@ const Trigger = require("../models/Trigger");
 
 // Import the cache refresher from index.js
 const { updateTriggerCache } = require("../utils/triggerHelper");
+const CASINO_MANAGER_ROLE = "1475908523396300871";
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("autoreact")
     .setDescription("Manage automatic emoji reactions")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(0)
     .addSubcommand((sub) =>
       sub
         .setName("add")
@@ -47,6 +47,12 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    if (!interaction.member.roles.cache.has(CASINO_MANAGER_ROLE)) {
+      return interaction.reply({
+        content: "❌ Only Casino Managers can use this command.",
+        flags: [MessageFlags.Ephemeral],
+      });
+    }
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === "add") {
       const keyword = interaction.options.getString("keyword").toLowerCase();
