@@ -2,10 +2,17 @@ const { EmbedBuilder } = require("discord.js");
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog"); // Added AuditLog
 const { logToAudit } = require("../utils/logger");
+const CASINO_MANAGER_ROLE = "1475908523396300871";
 
 module.exports = {
   name: "remove-gold",
   async execute(interaction) {
+    if (!interaction.member.roles.cache.has(CASINO_MANAGER_ROLE)) {
+      return interaction.reply({
+        content: "❌ Only Casino Managers can use this command.",
+        ephemeral: true,
+      });
+    }
     const target = interaction.options.getUser("user");
     const amount = interaction.options.getInteger("amount");
 

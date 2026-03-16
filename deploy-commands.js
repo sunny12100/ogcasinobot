@@ -117,7 +117,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("add-gold")
     .setDescription("Admin: Add gold to a user")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(0)
     .addUserOption((opt) =>
       opt
         .setName("user")
@@ -135,7 +135,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("remove-gold")
     .setDescription("Admin: Take gold from a user")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(0)
     .addUserOption((opt) =>
       opt
         .setName("user")
