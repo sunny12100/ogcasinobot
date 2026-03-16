@@ -53,24 +53,32 @@ mongoose
   .catch((err) => console.error("❌ MongoDB Connection Error:", err));
 
 // --- Load Commands Dynamically ---
+// --- Load Commands Dynamically (Multi-Folder) ---
 client.commands = new Collection();
-const commandsPath = path.join(__dirname, "commands");
-const commandFiles = fs
-  .readdirSync(commandsPath)
-  .filter((file) => file.endsWith(".js"));
+const commandFolders = ["commands", "vipCommands"]; // Add your new folder name here
 
-for (const file of commandFiles) {
-  const command = require(path.join(commandsPath, file));
+for (const folder of commandFolders) {
+  const folderPath = path.join(__dirname, folder);
 
-  // Support both old (name) and new (data.name) command formats
-  const commandName = command.name || command.data?.name;
-
-  if (!commandName) {
-    console.warn(`⚠️ Command in ${file} is missing a name.`);
+  // Create folder if it doesn't exist to prevent errors
+  if (!fs.existsSync(folderPath)) {
+    fs.mkdirSync(folderPath);
     continue;
   }
 
-  client.commands.set(commandName, command);
+  const commandFiles = fs
+    .readdirSync(folderPath)
+    .filter((file) => file.endsWith(".js"));
+
+  for (const file of commandFiles) {
+    const command = require(path.join(folderPath, file));
+    const commandName = command.name || command.data?.name;
+
+    if (commandName) {
+      client.commands.set(commandName, command);
+      console.log(`Loaded command: ${folder}/${commandName}`);
+    }
+  }
 }
 
 // --- LOTTERY RECOVERY SYSTEM ---
@@ -447,7 +455,7 @@ setInterval(async () => {
     if (expiredUsers.length === 0) return;
 
     const guild = await client.guilds.fetch(process.env.GUILD_ID);
-    const PASS_ROLE_ID = "YOUR_ROLE_ID_HERE"; // Replace with your actual Role ID
+    const PASS_ROLE_ID = "1483219208962834473"; // Replace with your actual Role ID
 
     for (const user of expiredUsers) {
       const member = await guild.members.fetch(user.userId).catch(() => null);

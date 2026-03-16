@@ -360,6 +360,9 @@ const commands = [
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("Show all registered triggers"),
     ),
+  new SlashCommandBuilder()
+    .setName("profit-loss")
+    .setDescription("📊 Lounge: View your total practice gains and losses"),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
