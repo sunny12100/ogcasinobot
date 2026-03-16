@@ -15,12 +15,8 @@ function randomFloat() {
   return crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
 }
 
-function rollDie() {
-  return crypto.randomInt(1, 7);
-}
-
 function rollDice() {
-  return rollDie() + rollDie();
+  return crypto.randomInt(1, 7) + crypto.randomInt(1, 7);
 }
 
 module.exports = {
@@ -32,50 +28,51 @@ module.exports = {
 
     if (!interaction.member.roles.cache.has(LOUNGE_ROLE)) {
       return interaction.reply({
-        content: "🚫 This command is restricted.",
+        content: "🚫 Restricted access.",
         ephemeral: true,
       });
     }
 
     if (!amount || amount <= 0 || amount > MAX_BET) {
-      return interaction.reply({
-        content: `❌ Bet must be between 1 and ${MAX_BET.toLocaleString()}.`,
-        ephemeral: true,
-      });
+      const msg = `❌ Bet must be 1 - ${MAX_BET.toLocaleString()}.`;
+      return interaction.replied
+        ? interaction.followUp({ content: msg, ephemeral: true })
+        : interaction.reply({ content: msg, ephemeral: true });
     }
 
     if (activeDice.has(userId)) {
-      return interaction.reply({
-        content: "❌ You are already rolling!",
-        ephemeral: true,
-      });
+      return interaction
+        .reply({ content: "❌ You are already rolling!", ephemeral: true })
+        .catch(() => null);
     }
 
+    // Defer only if it's a fresh interaction
     if (!interaction.deferred && !interaction.replied)
       await interaction.deferReply();
 
+    activeDice.add(userId);
+    let failSafe = setTimeout(() => activeDice.delete(userId), 35000);
+
     try {
-      // 1. ATOMIC CHECK & DEDUCT
+      // Deduct gold
       let data = await PassUser.findOneAndUpdate(
-        { userId },
-        { $setOnInsert: { userId } },
+        { userId, passBalance: { $gte: amount } },
+        { $inc: { passBalance: -amount } },
         { new: true, upsert: true, setDefaultsOnInsert: true },
       );
 
-      if (data.passBalance < amount) {
+      if (!data || data.passBalance < 0) {
+        if (data)
+          await PassUser.updateOne(
+            { userId },
+            { $inc: { passBalance: amount } },
+          );
+        activeDice.delete(userId);
+        clearTimeout(failSafe);
         return interaction.editReply({
-          content: `❌ Insufficient balance! Current: \`${data.passBalance.toLocaleString()}\``,
+          content: `❌ Insufficient balance! Balance: \`${(data?.passBalance || 0).toLocaleString()}\``,
         });
       }
-
-      data = await PassUser.findOneAndUpdate(
-        { userId, passBalance: { $gte: amount } },
-        { $inc: { passBalance: -amount } },
-        { new: true },
-      );
-
-      activeDice.add(userId);
-      const failSafe = setTimeout(() => activeDice.delete(userId), 35000);
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -90,15 +87,15 @@ module.exports = {
           .setEmoji("⬇️"),
       );
 
-      const initialEmbed = new EmbedBuilder()
+      const embed = new EmbedBuilder()
         .setTitle("🎲 DOUBLE DICE")
         .setColor(0x5865f2)
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nChoose **Higher** or **Lower** to win a **2x** payout!`,
+          `👤 <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nChoose **Higher** or **Lower**!`,
         );
 
       const msg = await interaction.editReply({
-        embeds: [initialEmbed],
+        embeds: [embed],
         components: [row],
       });
       const collector = msg.createMessageComponentCollector({
@@ -109,7 +106,8 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
           return i.reply({ content: "Not your game!", ephemeral: true });
-        collector.stop();
+
+        collector.stop(); // Stop immediately to prevent double clicks
 
         await i.update({
           embeds: [
@@ -125,32 +123,24 @@ module.exports = {
 
         setTimeout(async () => {
           try {
-            const won = randomFloat() < 0.5; // Clean 50/50 Odds
-            let dealerRoll, userRoll;
-
-            // Generate visuals to match the outcome
+            const won = randomFloat() < 0.5;
+            let dRoll, uRoll;
             do {
-              dealerRoll = rollDice();
-              userRoll = rollDice();
+              dRoll = rollDice();
+              uRoll = rollDice();
             } while (
               (won &&
-                (i.customId === "higher"
-                  ? userRoll <= dealerRoll
-                  : userRoll >= dealerRoll)) ||
+                (i.customId === "higher" ? uRoll <= dRoll : uRoll >= dRoll)) ||
               (!won &&
-                (i.customId === "higher"
-                  ? userRoll > dealerRoll
-                  : userRoll < dealerRoll)) ||
-              userRoll === dealerRoll // Avoid ties for cleaner 50/50
+                (i.customId === "higher" ? uRoll > dRoll : uRoll < dRoll)) ||
+              uRoll === dRoll
             );
-
-            const payout = won ? amount * 2 : 0;
 
             let updated = await PassUser.findOneAndUpdate(
               { userId },
               {
                 $inc: {
-                  passBalance: payout,
+                  passBalance: won ? amount * 2 : 0,
                   totalWagered: amount,
                   totalWon: won ? amount : 0,
                   totalLost: won ? 0 : amount,
@@ -160,21 +150,21 @@ module.exports = {
               { new: true },
             );
 
-            let statusText = "";
+            let reloadText = "";
             if (updated.passBalance < 1) {
               updated = await PassUser.findOneAndUpdate(
                 { userId },
                 { $set: { passBalance: 50000 } },
                 { new: true },
               );
-              statusText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
+              reloadText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
             }
 
-            const resultEmbed = new EmbedBuilder()
+            const resEmbed = new EmbedBuilder()
               .setTitle(won ? "🎉 WINNER!" : "💀 HOUSE WINS")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Dealer: **${dealerRoll}** vs You: **${userRoll}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold${statusText}`,
+                `### Dealer: **${dRoll}** vs You: **${uRoll}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold${reloadText}`,
               );
 
             const repeatRow = new ActionRowBuilder().addComponents(
@@ -190,33 +180,30 @@ module.exports = {
             );
 
             const finalMsg = await interaction.editReply({
-              embeds: [resultEmbed],
+              embeds: [resEmbed],
               components: [repeatRow],
             });
-            const endCollector = finalMsg.createMessageComponentCollector({
-              componentType: ComponentType.Button,
-              time: 10000,
-            });
 
-            endCollector.on("collect", async (btn) => {
-              if (btn.user.id !== userId) return;
-              activeDice.delete(userId);
-              clearTimeout(failSafe);
-              if (btn.customId === "dice_rep") {
-                await btn.deferUpdate();
-                return module.exports.execute(btn, amount);
-              }
-              await btn.update({ components: [] });
-            });
-          } catch (settleErr) {
-            console.error(settleErr);
-            await PassUser.updateOne(
-              { userId },
-              { $inc: { passBalance: amount } },
-            );
-          } finally {
+            // Repeat Collector
+            const next = await finalMsg
+              .awaitMessageComponent({
+                filter: (b) => b.user.id === userId,
+                time: 15000,
+              })
+              .catch(() => null);
+
+            // CLEAN UP STATE BEFORE REPEATING
             activeDice.delete(userId);
             clearTimeout(failSafe);
+
+            if (next?.customId === "dice_rep") {
+              await next.deferUpdate();
+              return module.exports.execute(next, amount);
+            }
+            if (next) await next.update({ components: [] });
+          } catch (err) {
+            console.error(err);
+            activeDice.delete(userId);
           }
         }, 2000);
       });
@@ -240,6 +227,7 @@ module.exports = {
       });
     } catch (err) {
       activeDice.delete(userId);
+      clearTimeout(failSafe);
       console.error(err);
     }
   },
