@@ -24,21 +24,21 @@ module.exports = {
 
     if (!interaction.member.roles.cache.has(LOUNGE_ROLE)) {
       return interaction.reply({
-        content: "🚫 This is for **OG Pass** holders!",
+        content: "🚫 This command is restricted.",
         ephemeral: true,
       });
     }
 
     if (!amount || amount <= 0 || amount > MAX_BET) {
       return interaction.reply({
-        content: `❌ Bet must be 1 - ${MAX_BET.toLocaleString()}.`,
+        content: `❌ Bet must be between 1 and ${MAX_BET.toLocaleString()}.`,
         ephemeral: true,
       });
     }
 
     if (activeCoinflip.has(userId)) {
       return interaction.reply({
-        content: "❌ Coin already in the air!",
+        content: "❌ You already have a coin in the air!",
         ephemeral: true,
       });
     }
@@ -47,21 +47,21 @@ module.exports = {
       await interaction.deferReply();
 
     try {
-      // ATOMIC CHECK & DEDUCT (With Upsert to fix the 0 balance bug)
-      let vipData = await PassUser.findOneAndUpdate(
+      // 1. Ensure user exists and get balance
+      let data = await PassUser.findOneAndUpdate(
         { userId },
-        { $setOnInsert: { userId } }, // Basic setup if new
+        { $setOnInsert: { userId } },
         { new: true, upsert: true, setDefaultsOnInsert: true },
       );
 
-      if (vipData.passBalance < amount) {
+      if (data.passBalance < amount) {
         return interaction.editReply({
-          content: `❌ Insufficient Gold! Balance: \`${vipData.passBalance.toLocaleString()}\``,
+          content: `❌ Insufficient balance! Current: \`${data.passBalance.toLocaleString()}\``,
         });
       }
 
-      // Deduct the bet
-      vipData = await PassUser.findOneAndUpdate(
+      // 2. Deduct
+      data = await PassUser.findOneAndUpdate(
         { userId, passBalance: { $gte: amount } },
         { $inc: { passBalance: -amount } },
         { new: true },
@@ -84,10 +84,10 @@ module.exports = {
       );
 
       const initialEmbed = new EmbedBuilder()
-        .setTitle("🪙 VIP COINFLIP")
+        .setTitle("🪙 COINFLIP")
         .setColor(0x5865f2)
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` Gold\n\nPick a side! **50/50 Odds.**`,
+          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side to double your bet!`,
         );
 
       const msg = await interaction.editReply({
@@ -101,7 +101,7 @@ module.exports = {
 
       collector.on("collect", async (i) => {
         if (i.user.id !== userId)
-          return i.reply({ content: "Not yours!", ephemeral: true });
+          return i.reply({ content: "Not your game!", ephemeral: true });
         collector.stop();
 
         await i.update({
@@ -139,23 +139,22 @@ module.exports = {
             { new: true },
           );
 
-          // PITY REFRESH: If balance is 0, give 50k
-          let pityMsg = "";
+          // Pity Reload logic (hidden in description)
+          let statusText = "";
           if (updated.passBalance < 1) {
             updated = await PassUser.findOneAndUpdate(
               { userId },
               { $set: { passBalance: 50000 } },
               { new: true },
             );
-            pityMsg =
-              "\n\n💸 *You ran out of gold! The House gave you a **50,000** pity reload.*";
+            statusText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
           }
 
           const resultEmbed = new EmbedBuilder()
-            .setTitle(won ? "🎉 VIP WIN!" : "💀 VIP LOSS")
+            .setTitle(won ? "🎉 WINNER!" : "💀 LOST")
             .setColor(won ? 0x2ecc71 : 0xe74c3c)
             .setDescription(
-              `### Result: **${resultSide.toUpperCase()}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Net:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` Gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\`${pityMsg}`,
+              `### The coin landed on: **${resultSide.toUpperCase()}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold${statusText}`,
             );
 
           const repeatRow = new ActionRowBuilder().addComponents(
