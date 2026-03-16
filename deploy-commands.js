@@ -131,6 +131,21 @@ const commands = [
         .setRequired(true)
         .setMinValue(1),
     ),
+  new SlashCommandBuilder()
+    .setName("og-pass")
+    .setDescription("Purchase an OG Pass for VIP channel access")
+    .addStringOption((option) =>
+      option
+        .setName("duration")
+        .setDescription("Select your pass duration")
+        .setRequired(true)
+        .addChoices(
+          { name: "2 Hours (300 Gold)", value: "2h" },
+          { name: "1 Day (600 Gold)", value: "1d" },
+          { name: "1 Week (1,500 Gold)", value: "1w" },
+          { name: "1 Month (3,000 Gold)", value: "1m" },
+        ),
+    ),
 
   new SlashCommandBuilder()
     .setName("remove-gold")

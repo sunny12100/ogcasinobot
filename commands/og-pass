@@ -1,0 +1,83 @@
+const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const User = require("../models/User");
+
+// Configuration for the tiers
+const PASS_TIERS = {
+  "2h": { price: 300, duration: 2 * 60 * 60 * 1000, label: "2 Hours" },
+  "1d": { price: 600, duration: 24 * 60 * 60 * 1000, label: "1 Day" },
+  "1w": { price: 1500, duration: 7 * 24 * 60 * 60 * 1000, label: "1 Week" },
+  "1m": { price: 3000, duration: 30 * 24 * 60 * 60 * 1000, label: "1 Month" },
+};
+
+const PASS_ROLE_ID = "YOUR_ROLE_ID_HERE";
+
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName("og-pass")
+    .setDescription("Purchase an OG Pass for VIP channel access")
+    .addStringOption((option) =>
+      option
+        .setName("duration")
+        .setDescription("How long do you want the pass for?")
+        .setRequired(true)
+        .addChoices(
+          { name: "2 Hours (300 Gold)", value: "2h" },
+          { name: "1 Day (600 Gold)", value: "1d" },
+          { name: "1 Week (1.5k Gold)", value: "1w" },
+          { name: "1 Month (3k Gold)", value: "1m" },
+        ),
+    ),
+
+  async execute(interaction) {
+    const tierKey = interaction.options.getString("duration");
+    const tier = PASS_TIERS[tierKey];
+    const userId = interaction.user.id;
+
+    const user = await User.findOne({ userId });
+
+    if (!user || user.gold < tier.price) {
+      return interaction.reply({
+        content: `❌ You need **${tier.price.toLocaleString()} Gold** for this pass!`,
+        ephemeral: true,
+      });
+    }
+
+    // Calculate new expiry
+    // If they already have a pass, we add the time to their existing expiry
+    const now = Date.now();
+    const currentExpiry =
+      user.ogPassExpiry && user.ogPassExpiry > now
+        ? user.ogPassExpiry.getTime()
+        : now;
+
+    const newExpiry = new Date(currentExpiry + tier.duration);
+
+    await User.updateOne(
+      { userId },
+      {
+        $inc: { gold: -tier.price },
+        $set: { ogPassExpiry: newExpiry, hasOgPass: true },
+      },
+    );
+
+    // Add role
+    const member = await interaction.guild.members.fetch(userId);
+    await member.roles.add(PASS_ROLE_ID);
+
+    const embed = new EmbedBuilder()
+      .setTitle("🎟️ OG Pass Activated!")
+      .setColor(0x00ff00)
+      .setDescription(`You have purchased the **${tier.label}** pass.`)
+      .addFields(
+        { name: "Cost", value: `${tier.price} Gold`, inline: true },
+        {
+          name: "Expires",
+          value: `<t:${Math.floor(newExpiry.getTime() / 1000)}:F>`,
+          inline: true,
+        },
+      )
+      .setFooter({ text: "Enjoy your time in the VIP Lounge!" });
+
+    return interaction.reply({ embeds: [embed] });
+  },
+};

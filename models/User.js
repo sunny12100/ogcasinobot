@@ -6,6 +6,9 @@ const UserSchema = new mongoose.Schema({
   gold: { type: Number, default: 0 }, // Gold Balance
   verified: { type: Boolean, default: false }, // Status
   lastDaily: { type: Date, default: null }, // Cooldowns
+  // Add to your User Schema
+  ogPassExpiry: { type: Date, default: null },
+  hasOgPass: { type: Boolean, default: false },
 
   // Added these to support the tracker and registration logic
   latest_tx_time: { type: Number, default: 0 }, // Last transaction timestamp from game logs
