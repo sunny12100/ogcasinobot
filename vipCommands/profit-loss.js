@@ -4,33 +4,24 @@ const PassUser = require("../models/PassUser");
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("profit-loss")
-    .setDescription("📊 View your total gains and losses in the lounge"),
+    .setDescription("📊 View your total practice gains and losses"),
 
   async execute(interaction) {
-    const LOUNGE_CHANNEL = "1483219995834974382";
     const LOUNGE_ROLE = "1483219208962834473";
 
-    // Security Check
-    if (
-      interaction.channel.name !== LOUNGE_CHANNEL ||
-      !interaction.member.roles.cache.has(LOUNGE_ROLE)
-    ) {
+    if (!interaction.member.roles.cache.has(LOUNGE_ROLE)) {
       return interaction.reply({
-        content:
-          "🚫 This dashboard is only available to members in the **#games-vip** lounge.",
+        content: "🚫 Dashboard restricted to lounge members.",
         ephemeral: true,
       });
     }
 
-    const stats = await PassUser.findOne({ userId: interaction.user.id });
-
-    if (!stats || stats.gamesPlayed === 0) {
-      return interaction.reply({
-        content:
-          "❌ No data found. Play a game in the lounge first to start tracking your performance!",
-        ephemeral: true,
-      });
-    }
+    // Upsert here too so new users see their 1M balance immediately
+    const stats = await PassUser.findOneAndUpdate(
+      { userId: interaction.user.id },
+      { $setOnInsert: { userId: interaction.user.id } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
 
     const won = stats.totalWon || 0;
     const lost = stats.totalLost || 0;
@@ -38,12 +29,12 @@ module.exports = {
     const isGreen = net >= 0;
 
     const embed = new EmbedBuilder()
-      .setTitle(`🎰 Performance Review: ${interaction.user.username}`)
+      .setTitle(`🎰 Performance: ${interaction.user.username}`)
       .setColor(isGreen ? 0x2ecc71 : 0xe74c3c)
       .setThumbnail(interaction.user.displayAvatarURL())
       .addFields(
         {
-          name: "🏦 Current Balance",
+          name: "🏦 Lounge Balance",
           value: `\`${stats.passBalance.toLocaleString()}\` Gold`,
           inline: false,
         },
@@ -63,12 +54,12 @@ module.exports = {
           inline: true,
         },
         {
-          name: "🎮 Total Games",
+          name: "🎮 Games Played",
           value: `\`${stats.gamesPlayed}\``,
           inline: true,
         },
         {
-          name: "🔥 Wager Volume",
+          name: "🔥 Total Volume",
           value: `\`${(stats.totalWagered || 0).toLocaleString()}\``,
           inline: true,
         },

@@ -362,10 +362,10 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName("profit-loss")
-    .setDescription("📊 Lounge: View your total practice gains and losses"),
+    .setDescription("📊 Lounge: View your total gains and losses"),
   new SlashCommandBuilder()
     .setName("vip-coinflip")
-    .setDescription("🪙 VIP: High-stakes practice coinflip (50/50 odds)")
+    .setDescription("High-stakes coinflip ")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
