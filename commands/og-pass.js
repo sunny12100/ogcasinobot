@@ -9,7 +9,7 @@ const PASS_TIERS = {
   "1m": { price: 3000, duration: 30 * 24 * 60 * 60 * 1000, label: "1 Month" },
 };
 
-const PASS_ROLE_ID = "YOUR_ROLE_ID_HERE";
+const PASS_ROLE_ID = "1483219208962834473";
 
 module.exports = {
   data: new SlashCommandBuilder()
