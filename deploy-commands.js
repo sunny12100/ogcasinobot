@@ -363,6 +363,17 @@ const commands = [
   new SlashCommandBuilder()
     .setName("profit-loss")
     .setDescription("📊 Lounge: View your total practice gains and losses"),
+  new SlashCommandBuilder()
+    .setName("vip-coinflip")
+    .setDescription("🪙 VIP: High-stakes practice coinflip (50/50 odds)")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (1-5000)")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(5000),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);

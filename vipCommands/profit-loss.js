@@ -7,7 +7,7 @@ module.exports = {
     .setDescription("📊 View your total gains and losses in the lounge"),
 
   async execute(interaction) {
-    const LOUNGE_CHANNEL = "games-vip";
+    const LOUNGE_CHANNEL = "1483219995834974382";
     const LOUNGE_ROLE = "1483219208962834473";
 
     // Security Check
