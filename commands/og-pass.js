@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const User = require("../models/User");
+const { logToAudit } = require("../utils/logger"); // Ensure this path matches your project structure
 
 // Configuration for the tiers
 const PASS_TIERS = {
@@ -42,8 +43,7 @@ module.exports = {
       });
     }
 
-    // Calculate new expiry
-    // If they already have a pass, we add the time to their existing expiry
+    const initialBalance = user.gold;
     const now = Date.now();
     const currentExpiry =
       user.ogPassExpiry && user.ogPassExpiry > now
@@ -52,12 +52,14 @@ module.exports = {
 
     const newExpiry = new Date(currentExpiry + tier.duration);
 
-    await User.updateOne(
+    // Update Database
+    const updatedUser = await User.findOneAndUpdate(
       { userId },
       {
         $inc: { gold: -tier.price },
         $set: { ogPassExpiry: newExpiry, hasOgPass: true },
       },
+      { new: true },
     );
 
     // Add role
@@ -69,7 +71,11 @@ module.exports = {
       .setColor(0x00ff00)
       .setDescription(`You have purchased the **${tier.label}** pass.`)
       .addFields(
-        { name: "Cost", value: `${tier.price} Gold`, inline: true },
+        {
+          name: "Cost",
+          value: `${tier.price.toLocaleString()} Gold`,
+          inline: true,
+        },
         {
           name: "Expires",
           value: `<t:${Math.floor(newExpiry.getTime() / 1000)}:F>`,
@@ -78,6 +84,20 @@ module.exports = {
       )
       .setFooter({ text: "Enjoy your time in the VIP Lounge!" });
 
-    return interaction.reply({ embeds: [embed] });
+    await interaction.reply({ embeds: [embed] });
+
+    // --- AUDIT LOGGING ---
+    try {
+      await logToAudit(interaction.client, {
+        userId: userId,
+        bet: tier.price,
+        amount: -tier.price,
+        oldBalance: initialBalance,
+        newBalance: updatedUser.gold,
+        reason: `OG Pass Purchase: ${tier.label}`,
+      });
+    } catch (auditErr) {
+      console.error("Failed to log OG Pass purchase to audit:", auditErr);
+    }
   },
 };
