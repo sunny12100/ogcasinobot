@@ -3,7 +3,6 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ComponentType,
   SlashCommandBuilder,
 } = require("discord.js");
 const PassUser = require("../models/PassUser");
@@ -31,7 +30,7 @@ module.exports = {
 
   async execute(interaction, repeatAmount = null) {
     const userId = interaction.user.id;
-    const amount = repeatAmount ?? interaction.options?.getInteger?.("amount");
+    const amount = repeatAmount ?? interaction.options?.getInteger("amount");
     const LOUNGE_ROLE = "1483219208962834473";
 
     if (!interaction.member.roles.cache.has(LOUNGE_ROLE)) {
@@ -41,48 +40,38 @@ module.exports = {
       });
     }
 
-    if (!amount || amount <= 0 || amount > MAX_BET) {
-      const msg = `❌ Bet must be 1 - ${MAX_BET.toLocaleString()}.`;
-      return interaction.replied
-        ? interaction.followUp({ content: msg, ephemeral: true })
-        : interaction.reply({ content: msg, ephemeral: true });
+    if (activeHighLow.has(userId) && !repeatAmount) {
+      return interaction.reply({
+        content: "❌ You already have a game in progress!",
+        ephemeral: true,
+      });
     }
-
-    if (activeHighLow.has(userId)) return;
 
     if (!interaction.deferred && !interaction.replied)
       await interaction.deferReply();
-
     activeHighLow.add(userId);
-    let failSafe = setTimeout(() => activeHighLow.delete(userId), 35000);
 
     try {
-      // 1. SELF-HEALING BALANCE CHECK
-      let data = await PassUser.findOne({ userId });
-      if (!data) {
-        data = await PassUser.create({ userId, passBalance: 1000000 });
-      } else if (data.passBalance < amount) {
-        if (data.passBalance <= 0) {
-          data = await PassUser.findOneAndUpdate(
-            { userId },
-            { $set: { passBalance: 50000 } },
-            { new: true },
-          );
-        } else {
-          activeHighLow.delete(userId);
-          clearTimeout(failSafe);
-          return interaction.editReply({
-            content: `❌ Not enough gold! Balance: \`${data.passBalance.toLocaleString()}\``,
-          });
-        }
-      }
-
-      // 2. ATOMIC DEDUCTION
-      data = await PassUser.findOneAndUpdate(
+      // 1. Initial Deduction & Profit/Loss (Record Loss Immediately)
+      let data = await PassUser.findOneAndUpdate(
         { userId, passBalance: { $gte: amount } },
-        { $inc: { passBalance: -amount } },
+        { $inc: { passBalance: -amount, totalLost: amount, gamesPlayed: 1 } },
         { new: true },
       );
+
+      // Auto-Reload for VIPs
+      if (!data) {
+        data = await PassUser.findOneAndUpdate(
+          { userId },
+          { $set: { passBalance: 50000 } },
+          { upsert: true, new: true },
+        );
+        data = await PassUser.findOneAndUpdate(
+          { userId },
+          { $inc: { passBalance: -amount, totalLost: amount, gamesPlayed: 1 } },
+          { new: true },
+        );
+      }
 
       const cards = [
         "2",
@@ -121,7 +110,7 @@ module.exports = {
         .setDescription(
           `💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nDealer Card: **[ ${dealerCard} ]**\n\nWill the next card be **Higher** or **Lower**?`,
         )
-        .setFooter({ text: "Payout: 2× | Tie = Push (Refund)" });
+        .setFooter({ text: "Tie = Push (Refund) | Payout: 2x" });
 
       const msg = await interaction.editReply({
         embeds: [embed],
@@ -136,8 +125,11 @@ module.exports = {
         .catch(() => null);
 
       if (!choice) {
-        await PassUser.updateOne({ userId }, { $inc: { passBalance: amount } });
         activeHighLow.delete(userId);
+        await PassUser.updateOne(
+          { userId },
+          { $inc: { passBalance: amount, totalLost: -amount } },
+        ); // Refund on timeout
         return interaction.editReply({
           content: "⏲️ **Timed Out:** Refunded.",
           embeds: [],
@@ -158,10 +150,10 @@ module.exports = {
       });
 
       setTimeout(async () => {
-        // 100% RTP Logic: 50/50 Chance (Tie handled as Push)
         const wonRoll = randomFloat() < 0.5;
         let userIndex;
 
+        // Force 50/50 RTP Logic
         if (wonRoll) {
           if (choice.customId === "higher") {
             userIndex =
@@ -190,29 +182,26 @@ module.exports = {
             (choice.customId === "lower" && userIndex < dealerIndex));
 
         let payout = isTie ? amount : actuallyWon ? amount * 2 : 0;
+        let updateQuery = {};
 
-        let updated = await PassUser.findOneAndUpdate(
-          { userId },
-          {
-            $inc: {
-              passBalance: payout,
-              totalWagered: amount,
-              totalWon: actuallyWon ? amount : 0,
-              totalLost: actuallyWon || isTie ? 0 : amount,
-              gamesPlayed: 1,
-            },
-          },
-          { new: true },
-        );
+        if (actuallyWon) {
+          updateQuery = { $inc: { passBalance: payout, totalWon: payout } };
+        } else if (isTie) {
+          updateQuery = { $inc: { passBalance: payout, totalLost: -amount } }; // Negate the loss on Push
+        } else {
+          updateQuery = {}; // Loss already recorded
+        }
 
-        let reloadText = "";
+        let updated = await PassUser.findOneAndUpdate({ userId }, updateQuery, {
+          new: true,
+        });
+
         if (updated.passBalance < 1) {
           updated = await PassUser.findOneAndUpdate(
             { userId },
             { $set: { passBalance: 50000 } },
             { new: true },
           );
-          reloadText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
         }
 
         const resEmbed = new EmbedBuilder()
@@ -221,8 +210,11 @@ module.exports = {
           )
           .setColor(isTie ? 0xf1c40f : actuallyWon ? 0x2ecc71 : 0xe74c3c)
           .setDescription(
-            `Dealer: **${dealerCard}** vs You: **${userCard}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Payout:** \`${payout.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold${reloadText}`,
-          );
+            `Dealer: **${dealerCard}** vs You: **${userCard}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Payout:** \`${payout.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold`,
+          )
+          .setFooter({
+            text: `Stake: ${amount.toLocaleString()} | VIP Lounge`,
+          });
 
         const repeatRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -240,21 +232,24 @@ module.exports = {
           embeds: [resEmbed],
           components: [repeatRow],
         });
-        const next = await finalMsg
-          .awaitMessageComponent({
+
+        try {
+          const next = await finalMsg.awaitMessageComponent({
             filter: (b) => b.user.id === userId,
             time: 15000,
-          })
-          .catch(() => null);
+          });
 
-        activeHighLow.delete(userId);
-        clearTimeout(failSafe);
-
-        if (next?.customId === "hl_rep") {
-          await next.deferUpdate();
-          return module.exports.execute(next, amount);
+          activeHighLow.delete(userId);
+          if (next.customId === "hl_rep") {
+            await next.deferUpdate();
+            return module.exports.execute(next, amount);
+          } else {
+            await next.update({ components: [] });
+          }
+        } catch (e) {
+          activeHighLow.delete(userId);
+          await interaction.editReply({ components: [] }).catch(() => null);
         }
-        if (next) await next.update({ components: [] });
       }, 2000);
     } catch (err) {
       activeHighLow.delete(userId);
