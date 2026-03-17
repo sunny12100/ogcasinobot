@@ -150,9 +150,7 @@ module.exports = {
       .setColor(0x00ffff)
       .setDescription(
         `💰 **Stake:** \`${amount.toLocaleString()}\` | 💣 **Mines:** \`${mineCount}\`\nPick a square to find diamonds!`,
-      )
-      .setFooter({ text: "VIP 150% RTP Advantage Active" });
-
+      );
     const msg = await interaction.reply({
       embeds: [baseEmbed],
       components: createGrid(),
