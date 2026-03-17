@@ -6,7 +6,7 @@ const activeVipRaces = new Set();
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("vip-horserace")
-    .setDescription("💎 VIP LOUNGE: Elite Derby with 4x Payouts")
+    .setDescription("💎 VIP LOUNGE: Elite Derby with 8x Super-Payouts")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
@@ -60,7 +60,6 @@ module.exports = {
       );
 
       if (!userData) {
-        // Bust Protection / First-time setup
         userData = await PassUser.findOneAndUpdate(
           { userId },
           { $set: { passBalance: 50000 }, $inc: { gamesPlayed: 1 } },
@@ -101,7 +100,7 @@ module.exports = {
             .setTitle("💎 VIP ELITE DERBY")
             .setColor(0x00ffff)
             .setDescription(
-              `💰 **Bet:** \`${amount.toLocaleString()}\` on **${chosenHorse}**\n*VIP Multiplier: 4.0x*\n\n${generateTrack()}`,
+              `💰 **Bet:** \`${amount.toLocaleString()}\` on **${chosenHorse}**\n🔥 **SUPER MULTIPLIER: 8.0x**\n\n${generateTrack()}`,
             ),
         ],
       });
@@ -109,9 +108,9 @@ module.exports = {
       const interval = setInterval(async () => {
         horses.forEach((h) => {
           const boost = Math.random();
-          if (boost > 0.65)
-            h.pos += 2; // VIP races are slightly faster
-          else if (boost > 0.35) h.pos += 1;
+          if (boost > 0.6)
+            h.pos += 2; // VIP horses are high-performance
+          else if (boost > 0.3) h.pos += 1;
         });
 
         const finishers = horses.filter((h) => h.pos >= finishLine - 1);
@@ -124,7 +123,7 @@ module.exports = {
           const winner =
             finishers[Math.floor(Math.random() * finishers.length)];
           const won = winner.name === chosenHorse;
-          const winnings = amount * 4;
+          const winnings = amount * 8; // UPDATED PAYOUT
 
           let finalUser;
           if (won) {
@@ -143,8 +142,8 @@ module.exports = {
             .editReply({
               embeds: [
                 new EmbedBuilder()
-                  .setTitle(won ? "🌟 VIP VICTORY!" : "📉 DERBY DEFEAT")
-                  .setColor(won ? 0x2ecc71 : 0xe74c3c)
+                  .setTitle(won ? "🌟 MASSIVE VIP WIN!" : "📉 DERBY DEFEAT")
+                  .setColor(won ? 0xf1c40f : 0xe74c3c)
                   .setDescription(
                     `### Winner: ${winner.emoji} ${winner.name}\n\n${generateTrack()}\n\n💰 **Result:** \`${won ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **VIP Balance:** \`${finalUser.passBalance.toLocaleString()}\` gold`,
                   ),
@@ -160,7 +159,7 @@ module.exports = {
                 .setTitle("🏇 VIP RACE IN PROGRESS")
                 .setColor(0x00ffff)
                 .setDescription(
-                  `💰 **Betting:** \`${amount.toLocaleString()}\` on **${chosenHorse}**\n\n${generateTrack()}`,
+                  `💰 **Betting:** \`${amount.toLocaleString()}\` on **${chosenHorse}**\n🏆 **Multiplier:** \`8x\`\n\n${generateTrack()}`,
                 ),
             ],
           })
