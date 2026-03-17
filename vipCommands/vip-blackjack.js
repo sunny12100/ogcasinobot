@@ -14,11 +14,11 @@ const MAX_BET = 5000;
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("vip-blackjack")
-    .setDescription("🃏 VIP LOUNGE: 100% RTP Blackjack")
+    .setDescription("🎰 VIP LOUNGE: Premium Blackjack")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
-        .setDescription(`Gold to bet (1-${MAX_BET})`)
+        .setDescription(`Gold to bet (1-${MAX_BET.toLocaleString()})`)
         .setRequired(true)
         .setMinValue(1)
         .setMaxValue(MAX_BET),
@@ -29,6 +29,7 @@ module.exports = {
     const amount = repeatAmount ?? interaction.options?.getInteger("amount");
     const LOUNGE_ROLE = "1483219208962834473";
 
+    // 1. Initial Checks
     if (!interaction.member.roles.cache.has(LOUNGE_ROLE)) {
       return interaction.reply({
         content: "🚫 Restricted access. Purchase an OG Pass first!",
@@ -36,12 +37,20 @@ module.exports = {
       });
     }
 
-    if (activeBlackjack.has(userId)) return;
+    if (activeBlackjack.has(userId) && !repeatAmount) {
+      return interaction.reply({
+        content: "❌ You already have a game in progress!",
+        ephemeral: true,
+      });
+    }
+
+    // Safety Deferral
     if (!interaction.deferred && !interaction.replied)
       await interaction.deferReply();
+    activeBlackjack.add(userId);
 
     try {
-      // 1. SELF-HEALING BALANCE & DEDUCTION
+      // 2. Database & Balance Management
       let data = await PassUser.findOne({ userId });
       if (!data || data.passBalance < amount) {
         data = await PassUser.findOneAndUpdate(
@@ -56,36 +65,33 @@ module.exports = {
         { $inc: { passBalance: -amount } },
         { new: true },
       );
-      activeBlackjack.add(userId);
 
-      // 2. DECK & DEALING
-      const generateDeck = () => {
-        const suits = ["♠️", "❤️", "♣️", "♦️"];
-        const values = [
-          "2",
-          "3",
-          "4",
-          "5",
-          "6",
-          "7",
-          "8",
-          "9",
-          "10",
-          "J",
-          "Q",
-          "K",
-          "A",
-        ];
-        let newDeck = [];
-        for (let i = 0; i < 4; i++)
-          suits.forEach((s) => values.forEach((v) => newDeck.push(`${v}${s}`)));
-        return newDeck.sort(() => Math.random() - 0.5);
-      };
+      // 3. Game Setup
+      const suits = ["♠️", "❤️", "♣️", "♦️"];
+      const values = [
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "J",
+        "Q",
+        "K",
+        "A",
+      ];
+      let deck = [];
+      for (let i = 0; i < 4; i++)
+        suits.forEach((s) => values.forEach((v) => deck.push(`${v}${s}`)));
+      deck.sort(() => Math.random() - 0.5);
 
-      let deck = generateDeck();
       let playerHand = [deck.pop(), deck.pop()];
       let dealerHand = [deck.pop(), deck.pop()];
       let totalPot = amount;
+      let gameOver = false;
 
       const getVal = (hand) => {
         let total = 0,
@@ -105,117 +111,139 @@ module.exports = {
         return total;
       };
 
-      const createEmbed = (status = "Your move!", showDealer = false) => {
-        const pVal = getVal(playerHand);
-        const dVal = getVal(dealerHand);
+      const createEmbed = (
+        status = "Make your move...",
+        showDealer = false,
+        color = 0x5865f2,
+      ) => {
         return new EmbedBuilder()
-          .setTitle("🃏 VIP BLACKJACK")
-          .setColor(pVal > 21 ? 0xe74c3c : 0x5865f2)
-          .setDescription(`**STATUS:** ${status}\n${"▬".repeat(20)}`)
+          .setTitle("🎰 VIP BLACKJACK LOUNGE")
+          .setColor(color)
+          .setDescription(
+            `**Current Status:**\n> ${status}\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`,
+          )
           .addFields(
             {
-              name: "👤 PLAYER",
-              value: `**${playerHand.join(" ")}**\nValue: \`${pVal}\``,
+              name: "👤 YOUR HAND",
+              value: `**${playerHand.join(" ")}**\nTotal: \`${getVal(playerHand)}\``,
               inline: true,
             },
             {
               name: "🏦 DEALER",
               value: showDealer
-                ? `**${dealerHand.join(" ")}**\nValue: \`${dVal}\``
-                : `**${dealerHand[0]}** ❓`,
+                ? `**${dealerHand.join(" ")}**\nTotal: \`${getVal(dealerHand)}\``
+                : `**${dealerHand[0]}** 🎴`,
               inline: true,
             },
           )
           .setFooter({
-            text: `💰 Current Bet: ${totalPot.toLocaleString()} gold`,
+            text: `💰 Active Stake: ${totalPot.toLocaleString()} gold`,
           });
       };
 
-      const buildButtons = (isFirstMove) => {
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("hit")
-            .setLabel("Hit")
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId("stand")
-            .setLabel("Stand")
-            .setStyle(ButtonStyle.Secondary),
-        );
-        if (isFirstMove && data.passBalance >= amount) {
-          row.addComponents(
-            new ButtonBuilder()
-              .setCustomId("double")
-              .setLabel("Double Down")
-              .setStyle(ButtonStyle.Danger),
-          );
-        }
-        return row;
-      };
-
-      // 3. INITIAL CHECK (NATURAL BLACKJACK)
+      // 4. Initial Blackjack Check (3:2 Payout)
       if (getVal(playerHand) === 21) {
         const dVal = getVal(dealerHand);
         const payout = dVal === 21 ? amount : Math.floor(amount * 2.5);
-        const final = await PassUser.findOneAndUpdate(
-          { userId },
-          { $inc: { passBalance: payout } },
-          { new: true },
-        );
+        await PassUser.updateOne({ userId }, { $inc: { passBalance: payout } });
         activeBlackjack.delete(userId);
         return interaction.editReply({
           embeds: [
             createEmbed(
-              dVal === 21 ? "🤝 PUSH (Double Blackjack)" : "🎉 BLACKJACK!",
+              dVal === 21
+                ? "🤝 **PUSH (Both have Blackjack)**"
+                : "🔥 **NATURAL BLACKJACK!**",
               true,
+              0x2ecc71,
             ),
           ],
           components: [],
         });
       }
 
-      const msg = await interaction.editReply({
+      // 5. Main Game Loop
+      let currentMsg = await interaction.editReply({
         embeds: [createEmbed()],
-        components: [buildButtons(true)],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("hit")
+              .setLabel("Hit")
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("➕"),
+            new ButtonBuilder()
+              .setCustomId("stand")
+              .setLabel("Stand")
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji("✋"),
+            new ButtonBuilder()
+              .setCustomId("double")
+              .setLabel("Double Down")
+              .setStyle(ButtonStyle.Danger)
+              .setEmoji("💰")
+              .setDisabled(data.passBalance < amount),
+          ),
+        ],
       });
-      const collector = msg.createMessageComponentCollector({
+
+      const collector = currentMsg.createMessageComponentCollector({
         filter: (i) => i.user.id === userId,
         time: 30000,
       });
 
       collector.on("collect", async (i) => {
-        if (i.customId === "double") {
-          await PassUser.updateOne(
-            { userId },
-            { $inc: { passBalance: -amount } },
-          );
-          totalPot += amount;
-          playerHand.push(deck.pop());
-          collector.stop("stand");
-        } else if (i.customId === "hit") {
-          playerHand.push(deck.pop());
-          if (getVal(playerHand) >= 21) return collector.stop("stand");
-          await i.update({
-            embeds: [createEmbed()],
-            components: [buildButtons(false)],
-          });
-        } else if (i.customId === "stand") {
-          collector.stop("stand");
+        try {
+          if (i.customId === "double") {
+            await PassUser.updateOne(
+              { userId },
+              { $inc: { passBalance: -amount } },
+            );
+            totalPot += amount;
+            playerHand.push(deck.pop());
+            return collector.stop("stand");
+          }
+
+          if (i.customId === "hit") {
+            playerHand.push(deck.pop());
+            if (getVal(playerHand) >= 21) return collector.stop("stand");
+
+            await i.update({
+              embeds: [createEmbed()],
+              components: [
+                new ActionRowBuilder().addComponents(
+                  new ButtonBuilder()
+                    .setCustomId("hit")
+                    .setLabel("Hit")
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji("➕"),
+                  new ButtonBuilder()
+                    .setCustomId("stand")
+                    .setLabel("Stand")
+                    .setStyle(ButtonStyle.Secondary)
+                    .setEmoji("✋"),
+                ),
+              ],
+            });
+          } else if (i.customId === "stand") {
+            collector.stop("stand");
+          }
+        } catch (e) {
+          collector.stop("error");
         }
       });
 
-      collector.on("end", async (_, reason) => {
+      collector.on("end", async (collected, reason) => {
         activeBlackjack.delete(userId);
         if (reason === "time")
           return interaction.editReply({
-            content: "⌛ Timed out. House wins by default.",
+            content: "⌛ Game timed out.",
             components: [],
           });
 
-        // Dealer Turn
         let dVal = getVal(dealerHand);
         const pVal = getVal(playerHand);
 
+        // Dealer logic
         if (pVal <= 21) {
           while (dVal < 17) {
             dealerHand.push(deck.pop());
@@ -223,72 +251,67 @@ module.exports = {
           }
         }
 
-        let result = "";
-        let winMult = 0;
+        let resultMsg = "";
+        let finalPayout = 0;
+        let finalColor = 0xe74c3c;
 
         if (pVal > 21) {
-          result = "💀 BUSTED";
-          winMult = 0;
+          resultMsg = "💀 **BUSTED!** You went over 21.";
         } else if (dVal > 21) {
-          result = "🎉 DEALER BUSTED!";
-          winMult = 2;
+          resultMsg = "🎉 **DEALER BUST!** You win!";
+          finalPayout = totalPot * 2;
+          finalColor = 0x2ecc71;
         } else if (pVal > dVal) {
-          result = "✅ YOU WIN!";
-          winMult = 2;
+          resultMsg = "✅ **YOU WIN!** Beat the dealer.";
+          finalPayout = totalPot * 2;
+          finalColor = 0x2ecc71;
         } else if (pVal === dVal) {
-          result = "🤝 PUSH";
-          winMult = 1;
+          resultMsg = "🤝 **PUSH!** Gold returned.";
+          finalPayout = totalPot;
+          finalColor = 0xf1c40f;
         } else {
-          result = "❌ HOUSE WINS";
-          winMult = 0;
+          resultMsg = "❌ **HOUSE WINS!** Better luck next time.";
         }
 
-        const finalPayout = Math.floor(totalPot * winMult);
-        let updated = await PassUser.findOneAndUpdate(
+        const updated = await PassUser.findOneAndUpdate(
           { userId },
           { $inc: { passBalance: finalPayout } },
           { new: true },
         );
 
-        // Reload if bust
-        let reloadText = "";
-        if (updated.passBalance < 1) {
-          updated = await PassUser.findOneAndUpdate(
-            { userId },
-            { $set: { passBalance: 50000 } },
-            { new: true },
-          );
-          reloadText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
-        }
-
-        const finalRow = new ActionRowBuilder().addComponents(
+        // Post-game UI
+        const endRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId("bj_rep")
+            .setCustomId("rep_bj")
             .setLabel("Play Again")
             .setStyle(ButtonStyle.Success)
             .setDisabled(updated.passBalance < amount),
           new ButtonBuilder()
-            .setCustomId("bj_quit")
+            .setCustomId("quit_bj")
             .setLabel("Quit")
             .setStyle(ButtonStyle.Secondary),
         );
 
         const finalMsg = await interaction.editReply({
-          embeds: [createEmbed(result + reloadText, true)],
-          components: [finalRow],
+          embeds: [createEmbed(resultMsg, true, finalColor)],
+          components: [endRow],
         });
 
-        const next = await finalMsg
-          .awaitMessageComponent({
+        // Handle Play Again with a fresh collector to avoid "Interaction Failed"
+        try {
+          const nextAction = await finalMsg.awaitMessageComponent({
             filter: (b) => b.user.id === userId,
-            time: 10000,
-          })
-          .catch(() => null);
-        if (next?.customId === "bj_rep") {
-          await next.deferUpdate();
-          return module.exports.execute(next, amount);
+            time: 15000,
+          });
+
+          if (nextAction.customId === "rep_bj") {
+            return module.exports.execute(nextAction, amount);
+          } else {
+            await nextAction.update({ components: [] });
+          }
+        } catch (e) {
+          await interaction.editReply({ components: [] }).catch(() => null);
         }
-        await finalMsg.edit({ components: [] }).catch(() => null);
       });
     } catch (err) {
       activeBlackjack.delete(userId);
