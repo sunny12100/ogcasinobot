@@ -1,8 +1,8 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const User = require("../models/User");
-const { logToAudit } = require("../utils/logger"); // Ensure this path matches your project structure
+const PassUser = require("../models/PassUser"); // Ensure this path is correct
+const { logToAudit } = require("../utils/logger");
 
-// Configuration for the tiers
 const PASS_TIERS = {
   "2h": { price: 300, duration: 2 * 60 * 60 * 1000, label: "2 Hours" },
   "1d": { price: 600, duration: 24 * 60 * 60 * 1000, label: "1 Day" },
@@ -49,10 +49,9 @@ module.exports = {
       user.ogPassExpiry && user.ogPassExpiry > now
         ? user.ogPassExpiry.getTime()
         : now;
-
     const newExpiry = new Date(currentExpiry + tier.duration);
 
-    // Update Database
+    // 1. Deduct Gold and Update Expiry
     const updatedUser = await User.findOneAndUpdate(
       { userId },
       {
@@ -62,14 +61,22 @@ module.exports = {
       { new: true },
     );
 
-    // Add role
+    // 2. INITIALIZE VIP WALLET (Fixes the "0 Gold" glitch)
+    await PassUser.findOneAndUpdate(
+      { userId },
+      { $setOnInsert: { userId, passBalance: 1000000 } },
+      { upsert: true, new: true },
+    );
+
     const member = await interaction.guild.members.fetch(userId);
     await member.roles.add(PASS_ROLE_ID);
 
     const embed = new EmbedBuilder()
       .setTitle("🎟️ OG Pass Activated!")
       .setColor(0x00ff00)
-      .setDescription(`You have purchased the **${tier.label}** pass.`)
+      .setDescription(
+        `You have purchased the **${tier.label}** pass.\nYour VIP Lounge wallet has been initialized with **1,000,000** gold!`,
+      )
       .addFields(
         {
           name: "Cost",
@@ -82,22 +89,21 @@ module.exports = {
           inline: true,
         },
       )
-      .setFooter({ text: "Enjoy your time in the VIP Lounge!" });
+      .setFooter({ text: "Enjoy the VIP Lounge!" });
 
     await interaction.reply({ embeds: [embed] });
 
-    // --- AUDIT LOGGING ---
     try {
       await logToAudit(interaction.client, {
-        userId: userId,
+        userId,
         bet: tier.price,
         amount: -tier.price,
         oldBalance: initialBalance,
         newBalance: updatedUser.gold,
         reason: `OG Pass Purchase: ${tier.label}`,
       });
-    } catch (auditErr) {
-      console.error("Failed to log OG Pass purchase to audit:", auditErr);
+    } catch (e) {
+      console.error(e);
     }
   },
 };

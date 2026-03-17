@@ -36,38 +36,41 @@ module.exports = {
         : interaction.reply({ content: msg, ephemeral: true });
     }
 
-    if (activeCoinflip.has(userId)) {
-      return interaction
-        .reply({ content: "❌ Coin already in the air!", ephemeral: true })
-        .catch(() => null);
-    }
+    if (activeCoinflip.has(userId)) return;
 
     if (!interaction.deferred && !interaction.replied)
       await interaction.deferReply();
 
     activeCoinflip.add(userId);
-    let failSafe = setTimeout(() => activeCoinflip.delete(userId), 35000);
+    let failSafe = setTimeout(() => activeCoinflip.delete(userId), 30000);
 
     try {
-      // 1. Atomic deduction with Upsert
-      let data = await PassUser.findOneAndUpdate(
+      // Self-Healing Balance Check
+      let data = await PassUser.findOne({ userId });
+      if (!data) {
+        data = await PassUser.create({ userId, passBalance: 1000000 });
+      } else if (data.passBalance < amount) {
+        if (data.passBalance <= 0) {
+          data = await PassUser.findOneAndUpdate(
+            { userId },
+            { $set: { passBalance: 50000 } },
+            { new: true },
+          );
+        } else {
+          activeCoinflip.delete(userId);
+          clearTimeout(failSafe);
+          return interaction.editReply({
+            content: `❌ Not enough gold! Balance: \`${data.passBalance.toLocaleString()}\``,
+          });
+        }
+      }
+
+      // Deduct
+      data = await PassUser.findOneAndUpdate(
         { userId, passBalance: { $gte: amount } },
         { $inc: { passBalance: -amount } },
-        { new: true, upsert: true, setDefaultsOnInsert: true },
+        { new: true },
       );
-
-      if (!data || data.passBalance < 0) {
-        if (data)
-          await PassUser.updateOne(
-            { userId },
-            { $inc: { passBalance: amount } },
-          );
-        activeCoinflip.delete(userId);
-        clearTimeout(failSafe);
-        return interaction.editReply({
-          content: `❌ Insufficient balance! Balance: \`${(data?.passBalance || 0).toLocaleString()}\``,
-        });
-      }
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -82,141 +85,120 @@ module.exports = {
           .setEmoji("🦅"),
       );
 
-      const embed = new EmbedBuilder()
-        .setTitle("🪙 COINFLIP")
-        .setColor(0x5865f2)
-        .setDescription(
-          `👤 <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side!`,
-        );
-
       const msg = await interaction.editReply({
-        embeds: [embed],
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🪙 COINFLIP")
+            .setColor(0x5865f2)
+            .setDescription(
+              `👤 <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\nPick a side!`,
+            ),
+        ],
         components: [row],
       });
-      const collector = msg.createMessageComponentCollector({
-        componentType: ComponentType.Button,
-        time: 20000,
-      });
 
-      collector.on("collect", async (i) => {
-        if (i.user.id !== userId)
-          return i.reply({ content: "Not your game!", ephemeral: true });
+      const choice = await msg
+        .awaitMessageComponent({
+          filter: (i) => i.user.id === userId,
+          time: 20000,
+        })
+        .catch(() => null);
 
-        collector.stop();
-
-        await i.update({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("🪙 FLIPPING...")
-              .setColor(0xffaa00)
-              .setImage(
-                "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY3NyOHdrYmsydDhoNXN2cGNxajl2cnVqNmN2enBscm1oZHJuZHg4eCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/6jqfXikz9yzhS/giphy.gif",
-              ),
-          ],
+      if (!choice) {
+        await PassUser.updateOne({ userId }, { $inc: { passBalance: amount } });
+        activeCoinflip.delete(userId);
+        return interaction.editReply({
+          content: "⏲️ **Timed Out:** Refunded.",
+          embeds: [],
           components: [],
         });
+      }
 
-        setTimeout(async () => {
-          try {
-            const won = randomFloat() < 0.5;
-            const resultSide = won
-              ? i.customId
-              : i.customId === "heads"
-                ? "tails"
-                : "heads";
-
-            let updated = await PassUser.findOneAndUpdate(
-              { userId },
-              {
-                $inc: {
-                  passBalance: won ? amount * 2 : 0,
-                  totalWagered: amount,
-                  totalWon: won ? amount : 0,
-                  totalLost: won ? 0 : amount,
-                  gamesPlayed: 1,
-                },
-              },
-              { new: true },
-            );
-
-            let reloadText = "";
-            if (updated.passBalance < 1) {
-              updated = await PassUser.findOneAndUpdate(
-                { userId },
-                { $set: { passBalance: 50000 } },
-                { new: true },
-              );
-              reloadText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
-            }
-
-            const resEmbed = new EmbedBuilder()
-              .setTitle(won ? "🎉 WINNER!" : "💀 LOST")
-              .setColor(won ? 0x2ecc71 : 0xe74c3c)
-              .setDescription(
-                `### Result: **${resultSide.toUpperCase()}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold${reloadText}`,
-              );
-
-            const repeatRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId("cf_rep")
-                .setLabel("Flip Again")
-                .setStyle(ButtonStyle.Success)
-                .setDisabled(updated.passBalance < amount),
-              new ButtonBuilder()
-                .setCustomId("cf_quit")
-                .setLabel("Quit")
-                .setStyle(ButtonStyle.Secondary),
-            );
-
-            const finalMsg = await interaction.editReply({
-              embeds: [resEmbed],
-              components: [repeatRow],
-            });
-
-            // Wait for next action
-            const next = await finalMsg
-              .awaitMessageComponent({
-                filter: (b) => b.user.id === userId,
-                time: 15000,
-              })
-              .catch(() => null);
-
-            // CLEAN UP
-            activeCoinflip.delete(userId);
-            clearTimeout(failSafe);
-
-            if (next?.customId === "cf_rep") {
-              await next.deferUpdate();
-              return module.exports.execute(next, amount);
-            }
-            if (next) await next.update({ components: [] });
-          } catch (err) {
-            console.error(err);
-            activeCoinflip.delete(userId);
-          }
-        }, 2000);
+      await choice.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🪙 FLIPPING...")
+            .setColor(0xffaa00)
+            .setImage(
+              "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY3NyOHdrYmsydDhoNXN2cGNxajl2cnVqNmN2enBscm1oZHJuZHg4eCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/6jqfXikz9yzhS/giphy.gif",
+            ),
+        ],
+        components: [],
       });
 
-      collector.on("end", async (_, reason) => {
-        if (reason === "time") {
-          activeCoinflip.delete(userId);
-          clearTimeout(failSafe);
-          await PassUser.updateOne(
+      setTimeout(async () => {
+        const won = randomFloat() < 0.5;
+        const resultSide = won
+          ? choice.customId
+          : choice.customId === "heads"
+            ? "tails"
+            : "heads";
+
+        let updated = await PassUser.findOneAndUpdate(
+          { userId },
+          {
+            $inc: {
+              passBalance: won ? amount * 2 : 0,
+              totalWagered: amount,
+              totalWon: won ? amount : 0,
+              totalLost: won ? 0 : amount,
+              gamesPlayed: 1,
+            },
+          },
+          { new: true },
+        );
+
+        let reloadText = "";
+        if (updated.passBalance < 1) {
+          updated = await PassUser.findOneAndUpdate(
             { userId },
-            { $inc: { passBalance: amount } },
+            { $set: { passBalance: 50000 } },
+            { new: true },
           );
-          await interaction
-            .editReply({
-              content: "⏲️ **Timed Out:** Refunded.",
-              embeds: [],
-              components: [],
-            })
-            .catch(() => null);
+          reloadText = "\n\n*Reloaded 50,000 gold (Bust protection).*";
         }
-      });
+
+        const repeatRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("cf_rep")
+            .setLabel("Flip Again")
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(updated.passBalance < amount),
+          new ButtonBuilder()
+            .setCustomId("cf_quit")
+            .setLabel("Quit")
+            .setStyle(ButtonStyle.Secondary),
+        );
+
+        const resEmbed = new EmbedBuilder()
+          .setTitle(won ? "🎉 WINNER!" : "💀 LOST")
+          .setColor(won ? 0x2ecc71 : 0xe74c3c)
+          .setDescription(
+            `### Result: **${resultSide.toUpperCase()}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${won ? "+" : "-"}${amount.toLocaleString()}\` gold\n🏦 **Balance:** \`${updated.passBalance.toLocaleString()}\` gold${reloadText}`,
+          );
+
+        const finalMsg = await interaction.editReply({
+          embeds: [resEmbed],
+          components: [repeatRow],
+        });
+        const next = await finalMsg
+          .awaitMessageComponent({
+            filter: (b) => b.user.id === userId,
+            time: 15000,
+          })
+          .catch(() => null);
+
+        activeCoinflip.delete(userId);
+        clearTimeout(failSafe);
+
+        if (next?.customId === "cf_rep") {
+          await next.deferUpdate();
+          return module.exports.execute(next, amount);
+        }
+        if (next) await next.update({ components: [] });
+      }, 2000);
     } catch (err) {
       activeCoinflip.delete(userId);
-      clearTimeout(failSafe);
       console.error(err);
     }
   },
