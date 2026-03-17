@@ -470,6 +470,17 @@ const commands = [
         .setMinValue(1) // Updated to 25
         .setMaxValue(10000),
     ),
+  new SlashCommandBuilder()
+    .setName("vip-scratch")
+    .setDescription("💎 VIP: 5x5 Scratch Card")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("The cost of the card (1-10,000)")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(10000),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);

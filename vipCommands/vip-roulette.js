@@ -15,7 +15,7 @@ const MAX_BET = 10000; // Updated Max Bet
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("vip-roulette")
-    .setDescription("💎 VIP LOUNGE: High-RTP Roulette (150% Returns)")
+    .setDescription("💎 VIP LOUNGE: Roulette")
     .addIntegerOption((opt) =>
       opt
         .setName("amount")
