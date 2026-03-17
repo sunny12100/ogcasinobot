@@ -459,6 +459,17 @@ const commands = [
           { name: "IND (Yellow)", value: "IND" },
         ),
     ),
+  new SlashCommandBuilder()
+    .setName("vip-roulette")
+    .setDescription("Start a roulette game")
+    .addIntegerOption((option) =>
+      option
+        .setName("amount")
+        .setDescription("Amount of gold to bet (1-10000)")
+        .setRequired(true)
+        .setMinValue(1) // Updated to 25
+        .setMaxValue(10000),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
