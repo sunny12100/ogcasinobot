@@ -481,6 +481,17 @@ const commands = [
         .setMinValue(1)
         .setMaxValue(10000),
     ),
+  new SlashCommandBuilder()
+    .setName("vip-poker")
+    .setDescription("Play Texas Hold'em against the House bot!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (1-10000)")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(10000),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
