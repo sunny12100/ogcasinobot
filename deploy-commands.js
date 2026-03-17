@@ -396,6 +396,17 @@ const commands = [
         .setMinValue(1) // Updated to 25
         .setMaxValue(5000),
     ),
+  new SlashCommandBuilder()
+    .setName("vip-highlow")
+    .setDescription("Guess if the next card is Higher or Lower!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (1-5000)")
+        .setRequired(true)
+        .setMinValue(1) // Updated to 25
+        .setMaxValue(5000),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
