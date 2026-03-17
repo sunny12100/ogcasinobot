@@ -436,6 +436,29 @@ const commands = [
         .setMinValue(1)
         .setMaxValue(19),
     ),
+  new SlashCommandBuilder()
+    .setName("vip-horserace")
+    .setDescription("Bet on a horse race!")
+    .addIntegerOption((opt) =>
+      opt
+        .setName("amount")
+        .setDescription("Gold to bet (1-50000)")
+        .setRequired(true)
+        .setMinValue(1) // Updated to 25
+        .setMaxValue(50000),
+    )
+    .addStringOption((opt) =>
+      opt
+        .setName("horse")
+        .setDescription("Pick your champion")
+        .setRequired(true)
+        .addChoices(
+          { name: "OG (Red)", value: "OG" },
+          { name: "SYNDICATE (Blue)", value: "SYNDICATE" },
+          { name: "TITAN (Green)", value: "TITAN" },
+          { name: "IND (Yellow)", value: "IND" },
+        ),
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
