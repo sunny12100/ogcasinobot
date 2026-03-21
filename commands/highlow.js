@@ -30,7 +30,7 @@ async function resolveGame({
   isAuto = false,
 }) {
   try {
-    const winChance = 0.35;
+    const winChance = 0.42;
     const shouldWin = randomFloat() < winChance;
 
     let userIndex;
