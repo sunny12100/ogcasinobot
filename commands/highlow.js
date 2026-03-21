@@ -141,7 +141,7 @@ Will the next card be **Higher** or **Lower**?`,
 
         setTimeout(async () => {
           try {
-            const winChance = 0.475;
+            const winChance = 0.3;
             const shouldWin = randomFloat() < winChance;
 
             let userIndex;
