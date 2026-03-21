@@ -16,6 +16,147 @@ function randomFloat() {
   return crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
 }
 
+// 🔥 SINGLE GAME RESOLVER
+async function resolveGame({
+  choice,
+  interaction,
+  dealerIndex,
+  dealerCard,
+  cards,
+  amount,
+  userId,
+  initialBalance,
+  failSafe,
+  isAuto = false,
+}) {
+  try {
+    const winChance = 0.35;
+    const shouldWin = randomFloat() < winChance;
+
+    let userIndex;
+
+    if (shouldWin) {
+      if (choice === "higher") {
+        userIndex =
+          dealerIndex === cards.length - 1
+            ? dealerIndex
+            : crypto.randomInt(dealerIndex + 1, cards.length);
+      } else {
+        userIndex =
+          dealerIndex === 0 ? dealerIndex : crypto.randomInt(0, dealerIndex);
+      }
+    } else {
+      if (choice === "higher") {
+        userIndex = crypto.randomInt(0, dealerIndex + 1);
+      } else {
+        userIndex = crypto.randomInt(dealerIndex, cards.length);
+      }
+    }
+
+    const userCard = cards[userIndex];
+    const isTie = userIndex === dealerIndex;
+
+    const won =
+      !isTie &&
+      ((choice === "higher" && userIndex > dealerIndex) ||
+        (choice === "lower" && userIndex < dealerIndex));
+
+    let payout = 0;
+    let netChange = 0;
+    let title = "";
+    let color = 0;
+
+    if (isTie) {
+      payout = amount;
+      title = isAuto ? "🤝 PUSH (AUTO)" : "🤝 PUSH (TIE)";
+      color = 0xf1c40f;
+    } else if (won) {
+      payout = amount * 2;
+      netChange = amount;
+      title = isAuto ? "🎉 AUTO WIN!" : "🎉 YOU WON!";
+      color = 0x2ecc71;
+    } else {
+      netChange = -amount;
+      title = isAuto ? "💀 AUTO LOSS" : "💀 HOUSE WINS";
+      color = 0xe74c3c;
+    }
+
+    const updatedUser = await User.findOneAndUpdate(
+      { userId },
+      { $inc: { gold: payout } },
+      { new: true },
+    );
+
+    const resultEmbed = new EmbedBuilder()
+      .setTitle(title)
+      .setColor(color)
+      .setDescription(
+        `Dealer: **${dealerCard}**
+Your Card: **${userCard}**
+
+${isAuto ? `Auto Choice: **${choice.toUpperCase()}**` : `Result: **${isTie ? "Push" : won ? "Correct!" : "Wrong!"}**`}
+
+💰 Change: \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\`
+🏦 Balance: \`${updatedUser.gold.toLocaleString()}\``,
+      );
+
+    const repeatRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("hl_rep")
+        .setLabel("Play Again")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(updatedUser.gold < amount),
+      new ButtonBuilder()
+        .setCustomId("hl_quit")
+        .setLabel("Quit")
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    const finalMsg = await interaction.editReply({
+      embeds: [resultEmbed],
+      components: [repeatRow],
+    });
+
+    const endCollector = finalMsg.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 10000,
+    });
+
+    endCollector.on("collect", async (btnInt) => {
+      if (btnInt.user.id !== userId)
+        return btnInt.reply({ content: "Not yours!", ephemeral: true });
+
+      endCollector.stop();
+
+      if (btnInt.customId === "hl_rep") {
+        activeHighLow.delete(userId);
+        clearTimeout(failSafe);
+        await btnInt.deferUpdate();
+        return module.exports.execute(btnInt, Number(amount));
+      }
+
+      await btnInt.update({ components: [] });
+    });
+
+    await logToAudit(interaction.client, {
+      userId,
+      bet: amount,
+      amount: netChange,
+      oldBalance: initialBalance,
+      newBalance: updatedUser.gold,
+      reason: `HighLow: ${choice.toUpperCase()} (${dealerCard} vs ${userCard})`,
+    });
+  } catch (err) {
+    console.error("[Resolve Error]", err);
+    await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
+      () => null,
+    );
+  } finally {
+    activeHighLow.delete(userId);
+    clearTimeout(failSafe);
+  }
+}
+
 module.exports = {
   name: "highlow",
 
@@ -139,155 +280,57 @@ Will the next card be **Higher** or **Lower**?`,
           components: [],
         });
 
-        setTimeout(async () => {
-          try {
-            const winChance = 0.4;
-            const shouldWin = randomFloat() < winChance;
-
-            let userIndex;
-
-            if (shouldWin) {
-              if (choice === "higher") {
-                userIndex =
-                  dealerIndex === cards.length - 1
-                    ? dealerIndex
-                    : crypto.randomInt(dealerIndex + 1, cards.length);
-              } else {
-                userIndex =
-                  dealerIndex === 0
-                    ? dealerIndex
-                    : crypto.randomInt(0, dealerIndex);
-              }
-            } else {
-              if (choice === "higher") {
-                userIndex = crypto.randomInt(0, dealerIndex + 1);
-              } else {
-                userIndex = crypto.randomInt(dealerIndex, cards.length);
-              }
-            }
-
-            const userCard = cards[userIndex];
-
-            const isTie = userIndex === dealerIndex;
-
-            const won =
-              !isTie &&
-              ((choice === "higher" && userIndex > dealerIndex) ||
-                (choice === "lower" && userIndex < dealerIndex));
-
-            let payout = 0;
-            let netChange = 0;
-            let title = "";
-            let color = 0;
-
-            if (isTie) {
-              payout = amount;
-              netChange = 0;
-              title = "🤝 PUSH (TIE)";
-              color = 0xf1c40f;
-            } else if (won) {
-              payout = amount * 2;
-              netChange = amount;
-              title = "🎉 YOU WON!";
-              color = 0x2ecc71;
-            } else {
-              payout = 0;
-              netChange = -amount;
-              title = "💀 HOUSE WINS";
-              color = 0xe74c3c;
-            }
-
-            const updatedUser = await User.findOneAndUpdate(
-              { userId },
-              { $inc: { gold: payout } },
-              { new: true },
-            );
-
-            const resultEmbed = new EmbedBuilder()
-              .setTitle(title)
-              .setColor(color)
-              .setDescription(
-                `Dealer: **${dealerCard}**
-Your Card: **${userCard}**
-
-Result: **${isTie ? "Push" : won ? "Correct!" : "Wrong!"}**
-
-💰 Change: \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\`
-🏦 Balance: \`${updatedUser.gold.toLocaleString()}\``,
-              );
-
-            const repeatRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId("hl_rep")
-                .setLabel("Play Again")
-                .setStyle(ButtonStyle.Success)
-                .setDisabled(updatedUser.gold < amount),
-              new ButtonBuilder()
-                .setCustomId("hl_quit")
-                .setLabel("Quit")
-                .setStyle(ButtonStyle.Secondary),
-            );
-
-            const finalMsg = await interaction.editReply({
-              embeds: [resultEmbed],
-              components: [repeatRow],
-            });
-
-            const endCollector = finalMsg.createMessageComponentCollector({
-              componentType: ComponentType.Button,
-              time: 10000,
-            });
-
-            endCollector.on("collect", async (btnInt) => {
-              if (btnInt.user.id !== userId)
-                return btnInt.reply({ content: "Not yours!", ephemeral: true });
-
-              endCollector.stop();
-
-              if (btnInt.customId === "hl_rep") {
-                activeHighLow.delete(userId);
-                clearTimeout(failSafe);
-                await btnInt.deferUpdate();
-                return module.exports.execute(btnInt, Number(amount));
-              }
-
-              await btnInt.update({ components: [] });
-            });
-
-            await logToAudit(interaction.client, {
-              userId,
-              bet: amount,
-              amount: netChange,
-              oldBalance: initialBalance,
-              newBalance: updatedUser.gold,
-              reason: `HighLow: ${choice.toUpperCase()} (${dealerCard} vs ${userCard})`,
-            });
-          } catch (err) {
-            console.error("[HighLow Settlement Error]", err);
-            await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
-              () => null,
-            );
-          } finally {
-            activeHighLow.delete(userId);
-            clearTimeout(failSafe);
-          }
+        setTimeout(() => {
+          resolveGame({
+            choice,
+            interaction,
+            dealerIndex,
+            dealerCard,
+            cards,
+            amount,
+            userId,
+            initialBalance,
+            failSafe,
+          });
         }, 2000);
 
         collector.stop();
       });
 
+      // 🔥 AUTOPLAY (SMART + SAME ENGINE)
       collector.on("end", async (collected, reason) => {
         if (reason === "time" && !settled) {
-          activeHighLow.delete(userId);
-          clearTimeout(failSafe);
+          settled = true;
 
-          await User.updateOne({ userId }, { $inc: { gold: amount } });
+          // 🧠 smarter choice based on dealer position
+          const autoChoice = dealerIndex < 6 ? "higher" : "lower";
 
           await interaction.editReply({
-            content: "⏲️ **Timed Out:** Bet refunded.",
-            embeds: [],
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("⏲️ AUTO PLAY")
+                .setColor(0xffaa00)
+                .setDescription(
+                  `No response detected.\nAuto-picked: **${autoChoice.toUpperCase()}**`,
+                ),
+            ],
             components: [],
           });
+
+          setTimeout(() => {
+            resolveGame({
+              choice: autoChoice,
+              interaction,
+              dealerIndex,
+              dealerCard,
+              cards,
+              amount,
+              userId,
+              initialBalance,
+              failSafe,
+              isAuto: true,
+            });
+          }, 1500);
         }
       });
     } catch (err) {
