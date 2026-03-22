@@ -34,7 +34,6 @@ module.exports = {
 
     await interaction.deferReply();
 
-    // ATOMIC INITIAL DEDUCTION
     const deductionResult = await User.findOneAndUpdate(
       { userId, gold: { $gte: currentBet } },
       { $inc: { gold: -currentBet } },
@@ -48,7 +47,7 @@ module.exports = {
     activeBlackjack.add(userId);
     const initialBalance = deductionResult.gold + currentBet;
 
-    /* -------------------- FISHER-YATES SHUFFLE -------------------- */
+    /* -------------------- SHUFFLE -------------------- */
     const generateDeck = () => {
       const suits = ["♠️", "❤️", "♣️", "♦️"];
       const values = [
@@ -67,21 +66,25 @@ module.exports = {
         "A",
       ];
       let newDeck = [];
+
       for (let i = 0; i < 6; i++) {
         for (const s of suits) {
           for (const v of values) newDeck.push(`${v}${s}`);
         }
       }
+
       for (let i = newDeck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
       }
+
       return newDeck;
     };
 
     let deck = generateDeck();
     let playerHand = [deck.pop(), deck.pop()];
     let dealerHand = [deck.pop(), deck.pop()];
+
     let currentPot = currentBet;
     let isSplit = false;
     let splitHands = [];
@@ -104,6 +107,20 @@ module.exports = {
         aces--;
       }
       return total;
+    };
+
+    const isSoft17 = (hand) => {
+      let total = 0,
+        aces = 0;
+      for (const card of hand) {
+        const v = card.replace(/[♠️❤️♣️♦️]/g, "");
+        if (v === "A") {
+          aces++;
+          total += 1;
+        } else if (["J", "Q", "K"].includes(v)) total += 10;
+        else total += parseInt(v);
+      }
+      return total === 17 && aces > 0;
     };
 
     const cardVal = (card) => card.replace(/[♠️❤️♣️♦️]/g, "").trim();
@@ -148,11 +165,16 @@ module.exports = {
           .setLabel("Stand")
           .setStyle(ButtonStyle.Secondary),
       );
-      // OPTIMISTIC SPLIT: No DB read here; atomic deduction handles the check later
+
+      const v1 = cardVal(playerHand[0]);
+      const v2 = cardVal(playerHand[1]);
+      const tenCards = ["10", "J", "Q", "K"];
+
       if (
         playerHand.length === 2 &&
-        cardVal(playerHand[0]) === cardVal(playerHand[1]) &&
-        !isSplit
+        v1 === v2 &&
+        !isSplit &&
+        !(tenCards.includes(v1) && tenCards.includes(v2))
       ) {
         row.addComponents(
           new ButtonBuilder()
@@ -161,27 +183,34 @@ module.exports = {
             .setStyle(ButtonStyle.Success),
         );
       }
+
       return row;
     };
 
-    if (getVal(playerHand) === 21) {
+    /* ---------- FIXED BLACKJACK CHECK ---------- */
+    const pVal = getVal(playerHand);
+    const dVal = getVal(dealerHand);
+
+    if (pVal === 21 || dVal === 21) {
       activeBlackjack.delete(userId);
-      const dVal = getVal(dealerHand);
-      const payout = dVal === 21 ? currentPot : Math.floor(currentPot * 2.5);
-      const finalUser = await User.findOneAndUpdate(
-        { userId },
-        { $inc: { gold: payout } },
-        { new: true },
-      );
+
+      let payout = 0;
+      let status = "";
+
+      if (pVal === 21 && dVal === 21) {
+        payout = currentPot;
+        status = "🤝 **PUSH**";
+      } else if (pVal === 21) {
+        payout = Math.floor(currentPot * 2.5);
+        status = "💰 **WINNER!**";
+      } else {
+        status = "💀 **DEALER BLACKJACK**";
+      }
+
+      await User.findOneAndUpdate({ userId }, { $inc: { gold: payout } });
+
       return interaction.editReply({
-        embeds: [
-          createEmbed(
-            "🎉 BLACKJACK!",
-            0x2ecc71,
-            true,
-            dVal === 21 ? "🤝 **PUSH**" : "💰 **WINNER!**",
-          ),
-        ],
+        embeds: [createEmbed("🎉 BLACKJACK!", 0x2ecc71, true, status)],
         components: [],
       });
     }
@@ -205,50 +234,43 @@ module.exports = {
       try {
         if (i.customId === "hit") {
           playerHand.push(deck.pop());
+
           if (getVal(playerHand) >= 21) {
             if (isSplit && activeHandIndex === 0) {
               activeHandIndex = 1;
               playerHand = splitHands[1];
-              await i.update({
-                embeds: [createEmbed("🃏 SPLIT: Hand 2", 0x5865f2)],
-                components: [buildButtons()],
-              });
             } else {
               collector.stop("ended");
-              await i.deferUpdate().catch(() => null);
             }
-          } else {
-            await i.update({
-              embeds: [
-                createEmbed(
-                  isSplit
-                    ? `🃏 SPLIT: Hand ${activeHandIndex + 1}`
-                    : "🃏 BLACKJACK",
-                  0x5865f2,
-                ),
-              ],
-              components: [buildButtons()],
-            });
           }
+
+          await i.update({
+            embeds: [createEmbed("🃏 BLACKJACK", 0x5865f2)],
+            components: [buildButtons()],
+          });
         } else if (i.customId === "split") {
-          const splitResult = await User.updateOne(
+          const res = await User.updateOne(
             { userId, gold: { $gte: currentBet } },
             { $inc: { gold: -currentBet } },
           );
-          if (splitResult.modifiedCount === 0) {
+
+          if (res.modifiedCount === 0) {
             return i.reply({
               content: "❌ Not enough gold to split!",
               ephemeral: true,
             });
           }
+
           currentPot += currentBet;
           isSplit = true;
+
           splitHands = [
             [playerHand[0], deck.pop()],
             [playerHand[1], deck.pop()],
           ];
+
           playerHand = splitHands[0];
-          activeHandIndex = 0;
+
           await i.update({
             embeds: [createEmbed("🃏 SPLIT: Hand 1", 0x5865f2)],
             components: [buildButtons()],
@@ -263,11 +285,8 @@ module.exports = {
             });
           } else {
             collector.stop("ended");
-            await i.deferUpdate().catch(() => null);
           }
         }
-      } catch (e) {
-        console.error("Collector Error:", e);
       } finally {
         isProcessing = false;
       }
@@ -276,35 +295,36 @@ module.exports = {
     collector.on("end", async (_, reason) => {
       try {
         if (reason === "time") {
-          return interaction
-            .editReply({
-              embeds: [
-                createEmbed(
-                  "⏱️ EXPIRED",
-                  0x34495e,
-                  true,
-                  "Timed out. Bet forfeited.",
-                ),
-              ],
-              components: [],
-            })
-            .catch(() => null);
+          return interaction.editReply({
+            embeds: [
+              createEmbed(
+                "⏱️ EXPIRED",
+                0x34495e,
+                true,
+                "Timed out. Bet forfeited.",
+              ),
+            ],
+            components: [],
+          });
         }
 
         let dVal = getVal(dealerHand);
         const pHands = isSplit ? splitHands : [playerHand];
+
         if (pHands.some((h) => getVal(h) <= 21)) {
-          while (dVal < 17) {
+          while (dVal < 17 || isSoft17(dealerHand)) {
             dealerHand.push(deck.pop());
             dVal = getVal(dealerHand);
           }
         }
 
-        let totalPayout = 0,
-          handResults = [];
+        let totalPayout = 0;
+        let handResults = [];
+
         for (let idx = 0; idx < pHands.length; idx++) {
           const pVal = getVal(pHands[idx]);
           const label = isSplit ? `Hand ${idx + 1}` : "Game";
+
           if (pVal > 21) handResults.push(`${label}: 💀 BUST`);
           else if (dVal > 21 || pVal > dVal) {
             totalPayout += currentBet * 2;
@@ -320,19 +340,18 @@ module.exports = {
           { $inc: { gold: totalPayout } },
           { new: true },
         );
-        await interaction
-          .editReply({
-            embeds: [
-              createEmbed(
-                totalPayout > currentPot ? "🎉 WINNER" : "💀 RESULT",
-                totalPayout > currentPot ? 0x2ecc71 : 0xe74c3c,
-                true,
-                handResults.join("\n"),
-              ),
-            ],
-            components: [],
-          })
-          .catch(() => null);
+
+        await interaction.editReply({
+          embeds: [
+            createEmbed(
+              totalPayout > currentPot ? "🎉 WINNER" : "💀 RESULT",
+              totalPayout > currentPot ? 0x2ecc71 : 0xe74c3c,
+              true,
+              handResults.join("\n"),
+            ),
+          ],
+          components: [],
+        });
 
         logToAudit(interaction.client, {
           userId,
@@ -342,10 +361,7 @@ module.exports = {
           newBalance: finalUser.gold,
           reason: `Blackjack: ${isSplit ? "Split" : "Standard"}`,
         });
-      } catch (err) {
-        console.error("End Logic Error:", err);
       } finally {
-        // GUARANTEED UNLOCK
         activeBlackjack.delete(userId);
       }
     });
