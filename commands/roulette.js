@@ -183,8 +183,8 @@ module.exports = {
             let won = false;
             let multiplier = 0;
 
-            // 🎯 Controlled win chance (38–44%)
-            const WIN_CHANCE = 0.38 + Math.random() * 0.06;
+            // 🎯 Controlled win chance (33–44%)
+            const WIN_CHANCE = 0.33 + Math.random() * 0.06;
             const forceWin = Math.random() < WIN_CHANCE;
 
             if (forceWin) {
