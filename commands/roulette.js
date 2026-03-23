@@ -18,7 +18,6 @@ module.exports = {
     const userId = interaction.user.id;
     const amount = repeatAmount ?? interaction.options?.getInteger?.("amount");
 
-    // 1. CONSISTENT INTERACTION HANDLING
     const sendError = async (content) => {
       const payload = { content, ephemeral: true };
       if (interaction.replied || interaction.deferred) {
@@ -42,7 +41,6 @@ module.exports = {
     let failSafe;
 
     try {
-      // 2. ATOMIC DEDUCTION
       const userData = await User.findOneAndUpdate(
         { userId, gold: { $gte: amount } },
         { $inc: { gold: -amount } },
@@ -61,48 +59,20 @@ module.exports = {
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId("roulette_bet")
-        .setPlaceholder("📍 Place your bet on the table...")
+        .setPlaceholder("📍 Place your bet...")
         .addOptions([
-          {
-            label: "Red",
-            value: "red",
-            description: "Payout: 2x",
-            emoji: "🔴",
-          },
-          {
-            label: "Black",
-            value: "black",
-            description: "Payout: 2x",
-            emoji: "⚫",
-          },
-          {
-            label: "Even",
-            value: "even",
-            description: "Payout: 2x",
-            emoji: "🔢",
-          },
-          {
-            label: "Odd",
-            value: "odd",
-            description: "Payout: 2x",
-            emoji: "🔢",
-          },
-          {
-            label: "Green (0/00)",
-            value: "green",
-            description: "Payout: 18x (17:1)",
-            emoji: "🟢",
-          },
+          { label: "Red", value: "red", emoji: "🔴" },
+          { label: "Black", value: "black", emoji: "⚫" },
+          { label: "Even", value: "even", emoji: "🔢" },
+          { label: "Odd", value: "odd", emoji: "🔢" },
+          { label: "Green", value: "green", emoji: "🟢" },
         ]);
 
       const initialEmbed = new EmbedBuilder()
         .setTitle("🎰 ROULETTE TABLE")
         .setColor(0xffaa00)
-        .setImage(
-          "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcTRzYnljc3ozbzk5cG9xb2ozNDNrczR5bDJ1OXdkOXR2OXd5aDlvdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uflBhaGt5lQsaCA/giphy.gif",
-        )
         .setDescription(
-          `👤 **Player:** <@${userId}>\n💰 **Bet:** \`${amount.toLocaleString()}\` gold\n\n*Select a space to spin!*`,
+          `👤 <@${userId}>\n💰 Bet: \`${amount.toLocaleString()}\` gold`,
         );
 
       const response = await interaction.editReply({
@@ -119,86 +89,90 @@ module.exports = {
       collector.on("collect", async (i) => {
         if (settled) return;
         settled = true;
+
         const space = i.values[0];
 
         await i.update({
           embeds: [
             new EmbedBuilder()
-              .setTitle("🎰 WHEEL IS SPINNING...")
-              .setColor(0xffaa00)
-              .setDescription(
-                `🎲 You bet \`${amount.toLocaleString()}\` on **${space.toUpperCase()}**`,
-              ),
+              .setTitle("🎰 Spinning...")
+              .setDescription(`Betting on **${space.toUpperCase()}**`),
           ],
           components: [],
         });
 
         setTimeout(async () => {
           try {
+            // 🔥 Controlled win chance (38–44%)
+            const WIN_CHANCE = 0.38 + Math.random() * 0.06;
+            const isWin = Math.random() < WIN_CHANCE;
+
             const redNumbers = [
               1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36,
             ];
+
             const wheel = [
               "0",
               "00",
-              1,
-              2,
-              3,
-              4,
-              5,
-              6,
-              7,
-              8,
-              9,
-              10,
-              11,
-              12,
-              13,
-              14,
-              15,
-              16,
-              17,
-              18,
-              19,
-              20,
-              21,
-              22,
-              23,
-              24,
-              25,
-              26,
-              27,
-              28,
-              29,
-              30,
-              31,
-              32,
-              33,
-              34,
-              35,
-              36,
+              ...Array.from({ length: 36 }, (_, i) => i + 1),
             ];
 
-            const result = wheel[Math.floor(Math.random() * wheel.length)];
-            const isGreen = result === "0" || result === "00";
-            const isRed = !isGreen && redNumbers.includes(result);
-            const resultColor = isGreen ? "green" : isRed ? "red" : "black";
-
-            let won = false;
+            let result;
+            let resultColor;
             let multiplier = 0;
+            let won = false;
 
-            if (space === resultColor && !isGreen) {
+            if (isWin) {
               won = true;
-              multiplier = 2;
-            } else if (space === "green" && isGreen) {
-              won = true;
-              multiplier = 18; // 17:1 + original bet
-            } else if (space === "even" && !isGreen && result % 2 === 0) {
-              won = true;
-              multiplier = 2;
-            } else if (space === "odd" && !isGreen && result % 2 !== 0) {
-              won = true;
-              multiplier = 2;
+
+              if (space === "green") {
+                multiplier = 18;
+                result = Math.random() < 0.5 ? "0" : "00";
+                resultColor = "green";
+              } else {
+                multiplier = 2;
+
+                if (space === "red") {
+                  result =
+                    redNumbers[Math.floor(Math.random() * redNumbers.length)];
+                  resultColor = "red";
+                } else if (space === "black") {
+                  const blacks = wheel.filter(
+                    (n) => typeof n === "number" && !redNumbers.includes(n),
+                  );
+                  result = blacks[Math.floor(Math.random() * blacks.length)];
+                  resultColor = "black";
+                } else if (space === "even") {
+                  const evens = wheel.filter(
+                    (n) => typeof n === "number" && n % 2 === 0,
+                  );
+                  result = evens[Math.floor(Math.random() * evens.length)];
+                  resultColor = redNumbers.includes(result) ? "red" : "black";
+                } else if (space === "odd") {
+                  const odds = wheel.filter(
+                    (n) => typeof n === "number" && n % 2 !== 0,
+                  );
+                  result = odds[Math.floor(Math.random() * odds.length)];
+                  resultColor = redNumbers.includes(result) ? "red" : "black";
+                }
+              }
+            } else {
+              // Force loss
+              do {
+                result = wheel[Math.floor(Math.random() * wheel.length)];
+                const isGreen = result === "0" || result === "00";
+                const isRed = !isGreen && redNumbers.includes(result);
+                resultColor = isGreen ? "green" : isRed ? "red" : "black";
+
+                won =
+                  (space === resultColor && !isGreen) ||
+                  (space === "green" && isGreen) ||
+                  (space === "even" && !isGreen && result % 2 === 0) ||
+                  (space === "odd" && !isGreen && result % 2 !== 0);
+              } while (won);
+
+              won = false;
+              multiplier = 0;
             }
 
             const payout = won ? Math.floor(amount * multiplier) : 0;
@@ -209,46 +183,48 @@ module.exports = {
               { $inc: { gold: payout } },
               { new: true },
             );
-            if (!updatedUser) throw new Error("Payout Failed");
 
-            const resultEmbed = new EmbedBuilder()
+            const embed = new EmbedBuilder()
               .setTitle(won ? "✨ WINNER ✨" : "💀 HOUSE WINS")
               .setColor(won ? 0x2ecc71 : 0xe74c3c)
               .setDescription(
-                `### Ball landed on: **${result} ${resultColor.toUpperCase()}**\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n💰 **Change:** \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\` gold\n🏦 **Balance:** \`${updatedUser.gold.toLocaleString()}\` gold`,
+                `Ball: **${result} ${resultColor.toUpperCase()}**\n` +
+                  `💰 Change: \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\`\n` +
+                  `🏦 Balance: \`${updatedUser.gold.toLocaleString()}\``,
               );
 
-            const repeatRow = new ActionRowBuilder().addComponents(
+            const row = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
-                .setCustomId("roulette_rep")
-                .setLabel(`Bet Again`)
+                .setCustomId("rep")
+                .setLabel("Bet Again")
                 .setStyle(ButtonStyle.Success)
                 .setDisabled(updatedUser.gold < amount),
               new ButtonBuilder()
-                .setCustomId("roulette_quit")
+                .setCustomId("quit")
                 .setLabel("Quit")
                 .setStyle(ButtonStyle.Secondary),
             );
 
-            const finalMsg = await interaction.editReply({
-              embeds: [resultEmbed],
-              components: [repeatRow],
+            const msg = await interaction.editReply({
+              embeds: [embed],
+              components: [row],
             });
-            const repeatCollector = finalMsg.createMessageComponentCollector({
+
+            const btnCollector = msg.createMessageComponentCollector({
               componentType: ComponentType.Button,
               time: 15000,
             });
 
-            repeatCollector.on("collect", async (btn) => {
+            btnCollector.on("collect", async (btn) => {
               if (btn.user.id !== userId) return;
-              repeatCollector.stop();
 
-              if (btn.customId === "roulette_rep") {
+              if (btn.customId === "rep") {
                 activeRoulette.delete(userId);
                 clearTimeout(failSafe);
                 await btn.deferUpdate();
-                return module.exports.execute(btn, Number(amount));
+                return module.exports.execute(btn, amount);
               }
+
               await btn.update({ components: [] });
             });
 
@@ -258,37 +234,34 @@ module.exports = {
               amount: netChange,
               oldBalance: userData.gold,
               newBalance: updatedUser.gold,
-              reason: `Roulette: ${space.toUpperCase()} (Ball: ${result} ${resultColor.toUpperCase()})`,
+              reason: `Roulette (${space}) → ${result} ${resultColor}`,
             });
           } catch (err) {
-            console.error("Roulette Settlement Error:", err);
-            await User.updateOne({ userId }, { $inc: { gold: amount } }).catch(
-              () => null,
-            );
+            console.error(err);
+            await User.updateOne({ userId }, { $inc: { gold: amount } });
           } finally {
             activeRoulette.delete(userId);
             clearTimeout(failSafe);
           }
-        }, 3000);
+        }, 2500);
+
         collector.stop();
       });
 
-      collector.on("end", async (collected, reason) => {
+      collector.on("end", async (c, reason) => {
         if (reason === "time" && !settled) {
           activeRoulette.delete(userId);
           clearTimeout(failSafe);
           await User.updateOne({ userId }, { $inc: { gold: amount } });
-          await interaction
-            .editReply({
-              content: "⏲️ **Timed Out:** Refunded.",
-              components: [],
-            })
-            .catch(() => null);
+
+          await interaction.editReply({
+            content: "⏲️ Timed out. Refunded.",
+            components: [],
+          });
         }
       });
     } catch (err) {
-      console.error("Roulette Fatal Error:", err);
-      // BUG FIX: Correct lock cleanup
+      console.error(err);
       activeRoulette.delete(userId);
       if (failSafe) clearTimeout(failSafe);
     }
