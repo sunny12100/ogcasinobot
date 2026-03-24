@@ -16,6 +16,12 @@ function randomFloat() {
   return crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
 }
 
+// 🔥 SAFE RANDOM (prevents crash)
+function safeRandomInt(min, max) {
+  if (max <= min) return min;
+  return crypto.randomInt(min, max);
+}
+
 // 🔥 SINGLE GAME RESOLVER
 async function resolveGame({
   choice,
@@ -34,18 +40,16 @@ async function resolveGame({
     const tieChance = 0.05;
 
     let userIndex;
-
     const roll = randomFloat();
 
-    // 🚨 EDGE HANDLING
     const isTopCard = dealerIndex === cards.length - 1;
     const isBottomCard = dealerIndex === 0;
 
+    // 🚨 EDGE CASE HANDLING
     if (
       (choice === "higher" && isTopCard) ||
       (choice === "lower" && isBottomCard)
     ) {
-      // impossible to win
       if (roll < tieChance) {
         userIndex = dealerIndex;
       } else {
@@ -61,16 +65,16 @@ async function resolveGame({
       } else if (roll < tieChance + winChance) {
         // WIN
         if (choice === "higher") {
-          userIndex = crypto.randomInt(dealerIndex + 1, cards.length);
+          userIndex = safeRandomInt(dealerIndex + 1, cards.length);
         } else {
-          userIndex = crypto.randomInt(0, dealerIndex);
+          userIndex = safeRandomInt(0, dealerIndex);
         }
       } else {
         // LOSS
         if (choice === "higher") {
-          userIndex = crypto.randomInt(0, dealerIndex);
+          userIndex = safeRandomInt(0, dealerIndex);
         } else {
-          userIndex = crypto.randomInt(dealerIndex + 1, cards.length);
+          userIndex = safeRandomInt(dealerIndex + 1, cards.length);
         }
       }
     }
@@ -300,7 +304,7 @@ Will the next card be **Higher** or **Lower**?`,
               .setTitle("🃏 DRAWING CARD...")
               .setColor(0xffaa00)
               .setImage(
-                "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExcDJvZzRicXRqZnJiMjR0MXJ2ZGJhc2puN2JwbW43c21xaHg3NHJpNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/bG5rDPx76wHMZtsXmr/giphy.gif",
+                "https://media.giphy.com/media/bG5rDPx76wHMZtsXmr/giphy.gif",
               ),
           ],
           components: [],
@@ -323,7 +327,7 @@ Will the next card be **Higher** or **Lower**?`,
         collector.stop();
       });
 
-      collector.on("end", async (collected, reason) => {
+      collector.on("end", async (_, reason) => {
         if (reason === "time" && !settled) {
           settled = true;
 
