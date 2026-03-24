@@ -6,6 +6,7 @@ const {
   ComponentType,
 } = require("discord.js");
 const User = require("../models/User");
+const crypto = require("crypto");
 const { logToAudit } = require("../utils/logger");
 
 const activeBlackjack = new Set();
@@ -74,7 +75,7 @@ module.exports = {
       }
 
       for (let i = newDeck.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = crypto.randomInt(0, i + 1);
         [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
       }
 
@@ -86,6 +87,7 @@ module.exports = {
     let dealerHand = [deck.pop(), deck.pop()];
 
     let currentPot = currentBet;
+    let bets = [currentBet];
     let isSplit = false;
     let splitHands = [];
     let activeHandIndex = 0;
@@ -138,7 +140,11 @@ module.exports = {
         .addFields(
           {
             name: "👤 PLAYER",
-            value: `**${playerHand.join(" ")}**\nValue: ${getVal(playerHand)}`,
+            value: isSplit
+              ? splitHands
+                  .map((h, i) => `Hand ${i + 1}: ${h.join(" ")} (${getVal(h)})`)
+                  .join("\n")
+              : `**${playerHand.join(" ")}**\nValue: ${getVal(playerHand)}`,
             inline: true,
           },
           {
@@ -200,9 +206,9 @@ module.exports = {
       if (pVal === 21 && dVal === 21) {
         payout = currentPot;
         status = "🤝 **PUSH**";
-      } else if (pVal === 21) {
-        payout = Math.floor(currentPot * 2.5);
-        status = "💰 **WINNER!**";
+      } else if (pVal === 21 && playerHand.length === 2 && !isSplit) {
+        payout = currentPot + Math.floor(currentBet * 1.5);
+        status = "🃏 **BLACKJACK!**";
       } else {
         status = "💀 **DEALER BLACKJACK**";
       }
@@ -262,6 +268,7 @@ module.exports = {
           }
 
           currentPot += currentBet;
+          bets = [currentBet, currentBet];
           isSplit = true;
 
           splitHands = [
@@ -295,17 +302,7 @@ module.exports = {
     collector.on("end", async (_, reason) => {
       try {
         if (reason === "time") {
-          return interaction.editReply({
-            embeds: [
-              createEmbed(
-                "⏱️ EXPIRED",
-                0x34495e,
-                true,
-                "Timed out. Bet forfeited.",
-              ),
-            ],
-            components: [],
-          });
+          reason = "auto";
         }
 
         let dVal = getVal(dealerHand);
@@ -323,16 +320,20 @@ module.exports = {
 
         for (let idx = 0; idx < pHands.length; idx++) {
           const pVal = getVal(pHands[idx]);
+          const bet = bets[idx] || currentBet;
           const label = isSplit ? `Hand ${idx + 1}` : "Game";
 
-          if (pVal > 21) handResults.push(`${label}: 💀 BUST`);
-          else if (dVal > 21 || pVal > dVal) {
-            totalPayout += currentBet * 2;
+          if (pVal > 21) {
+            handResults.push(`${label}: 💀 BUST`);
+          } else if (dVal > 21 || pVal > dVal) {
+            totalPayout += bet * 2;
             handResults.push(`${label}: ✅ WIN`);
           } else if (pVal === dVal) {
-            totalPayout += currentBet;
+            totalPayout += bet;
             handResults.push(`${label}: 🤝 PUSH`);
-          } else handResults.push(`${label}: ❌ LOSE`);
+          } else {
+            handResults.push(`${label}: ❌ LOSE`);
+          }
         }
 
         const finalUser = await User.findOneAndUpdate(
