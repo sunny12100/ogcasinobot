@@ -31,25 +31,47 @@ async function resolveGame({
 }) {
   try {
     const winChance = 0.3;
-    const shouldWin = randomFloat() < winChance;
+    const tieChance = 0.05;
 
     let userIndex;
 
-    if (shouldWin) {
-      if (choice === "higher") {
-        userIndex =
-          dealerIndex === cards.length - 1
-            ? dealerIndex
-            : crypto.randomInt(dealerIndex + 1, cards.length);
+    const roll = randomFloat();
+
+    // 🚨 EDGE HANDLING
+    const isTopCard = dealerIndex === cards.length - 1;
+    const isBottomCard = dealerIndex === 0;
+
+    if (
+      (choice === "higher" && isTopCard) ||
+      (choice === "lower" && isBottomCard)
+    ) {
+      // impossible to win
+      if (roll < tieChance) {
+        userIndex = dealerIndex;
       } else {
         userIndex =
-          dealerIndex === 0 ? dealerIndex : crypto.randomInt(0, dealerIndex);
+          choice === "higher"
+            ? Math.max(0, dealerIndex - 1)
+            : Math.min(cards.length - 1, dealerIndex + 1);
       }
     } else {
-      if (choice === "higher") {
-        userIndex = crypto.randomInt(0, dealerIndex + 1);
+      // 🎯 NORMAL LOGIC
+      if (roll < tieChance) {
+        userIndex = dealerIndex;
+      } else if (roll < tieChance + winChance) {
+        // WIN
+        if (choice === "higher") {
+          userIndex = crypto.randomInt(dealerIndex + 1, cards.length);
+        } else {
+          userIndex = crypto.randomInt(0, dealerIndex);
+        }
       } else {
-        userIndex = crypto.randomInt(dealerIndex, cards.length);
+        // LOSS
+        if (choice === "higher") {
+          userIndex = crypto.randomInt(0, dealerIndex);
+        } else {
+          userIndex = crypto.randomInt(dealerIndex + 1, cards.length);
+        }
       }
     }
 
@@ -94,7 +116,11 @@ async function resolveGame({
         `Dealer: **${dealerCard}**
 Your Card: **${userCard}**
 
-${isAuto ? `Auto Choice: **${choice.toUpperCase()}**` : `Result: **${isTie ? "Push" : won ? "Correct!" : "Wrong!"}**`}
+${
+  isAuto
+    ? `Auto Choice: **${choice.toUpperCase()}**`
+    : `Result: **${isTie ? "Push" : won ? "Correct!" : "Wrong!"}**`
+}
 
 💰 Change: \`${netChange >= 0 ? "+" : ""}${netChange.toLocaleString()}\`
 🏦 Balance: \`${updatedUser.gold.toLocaleString()}\``,
@@ -297,12 +323,10 @@ Will the next card be **Higher** or **Lower**?`,
         collector.stop();
       });
 
-      // 🔥 AUTOPLAY (SMART + SAME ENGINE)
       collector.on("end", async (collected, reason) => {
         if (reason === "time" && !settled) {
           settled = true;
 
-          // 🧠 smarter choice based on dealer position
           const autoChoice = dealerIndex < 6 ? "higher" : "lower";
 
           await interaction.editReply({
