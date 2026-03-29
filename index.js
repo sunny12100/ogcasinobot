@@ -416,7 +416,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.guild) return;
 
   const content = message.content.toLowerCase();
-  const trimmedContent = content.trim();
+  const trimmedContent = content.trim().toLowerCase();
 
   // ================= 💬 AUTO-REPLY (FAST MAP LOOKUP) =================
   // ================= 💬 AUTO-REPLY =================
