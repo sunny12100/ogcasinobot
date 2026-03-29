@@ -419,15 +419,17 @@ client.on("messageCreate", async (message) => {
   const trimmedContent = content.trim();
 
   // ================= 💬 AUTO-REPLY (FAST MAP LOOKUP) =================
+  // ================= 💬 AUTO-REPLY =================
   const replyCache = getReplyCache();
+  let didReply = false;
 
   if (replyCache.has(trimmedContent)) {
     try {
       await message.reply(replyCache.get(trimmedContent));
+      didReply = true;
     } catch (err) {
       console.error("❌ Reply failed:", err.message);
     }
-    return; // 🚀 STOP HERE (prevents reacting too)
   }
 
   // ================= 😄 AUTO-REACT =================
