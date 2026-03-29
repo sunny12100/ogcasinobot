@@ -74,17 +74,17 @@ const commands = [
         .setMaxValue(500),
     ),
 
-  new SlashCommandBuilder()
-    .setName("highlow")
-    .setDescription("Guess if the next card is Higher or Lower!")
-    .addIntegerOption((opt) =>
-      opt
-        .setName("amount")
-        .setDescription("Gold to bet (50-500)")
-        .setRequired(true)
-        .setMinValue(50) // Updated to 25
-        .setMaxValue(500),
-    ),
+  // new SlashCommandBuilder()
+  //   .setName("highlow")
+  //   .setDescription("Guess if the next card is Higher or Lower!")
+  //   .addIntegerOption((opt) =>
+  //     opt
+  //       .setName("amount")
+  //       .setDescription("Gold to bet (50-500)")
+  //       .setRequired(true)
+  //       .setMinValue(50) // Updated to 25
+  //       .setMaxValue(500),
+  //   ),
 
   new SlashCommandBuilder()
     .setName("blackjack")
@@ -359,6 +359,41 @@ const commands = [
     )
     .addSubcommand((sub) =>
       sub.setName("list").setDescription("Show all registered triggers"),
+    ),
+  new SlashCommandBuilder()
+    .setName("autoreply")
+    .setDescription("Manage automatic replies")
+    .setDefaultMemberPermissions(0)
+    .addSubcommand((sub) =>
+      sub
+        .setName("add")
+        .setDescription("Add a reply trigger")
+        .addStringOption((opt) =>
+          opt
+            .setName("keyword")
+            .setDescription("Exact word trigger")
+            .setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName("response")
+            .setDescription("Reply message")
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("remove")
+        .setDescription("Remove a reply trigger")
+        .addStringOption((opt) =>
+          opt
+            .setName("keyword")
+            .setDescription("Keyword to delete")
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName("list").setDescription("Show all reply triggers"),
     ),
   new SlashCommandBuilder()
     .setName("profit-loss")

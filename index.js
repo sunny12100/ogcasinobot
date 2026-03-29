@@ -23,7 +23,10 @@ const {
   updateTriggerCache,
   getTriggerCache,
 } = require("./utils/triggerHelper");
-
+const {
+  getReplyCache,
+  updateReplyCache,
+} = require("./utils/replyTriggerHelper");
 const fs = require("fs");
 const path = require("path");
 const mongoose = require("mongoose");
@@ -34,6 +37,10 @@ const Lottery = require("./models/Lottery");
 const LotteryTicket = require("./models/LotteryTicket");
 const { buildLotteryEmbed } = require("./utils/lotteryEmbed");
 const { logToAudit } = require("./utils/logger");
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 const client = new Client({
   intents: [
@@ -149,7 +156,7 @@ client.once(Events.ClientReady, async () => {
 
   // Initial load of triggers from the helper
   await updateTriggerCache();
-
+  await updateReplyCache(); // ✅ added
   startTracking(client);
   await recoverLotteries();
 });
@@ -409,13 +416,28 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot || !message.guild) return;
 
   const content = message.content.toLowerCase();
+  const trimmedContent = content.trim();
+
+  // ================= 💬 AUTO-REPLY (FAST MAP LOOKUP) =================
+  const replyCache = getReplyCache();
+
+  if (replyCache.has(trimmedContent)) {
+    try {
+      await message.reply(replyCache.get(trimmedContent));
+    } catch (err) {
+      console.error("❌ Reply failed:", err.message);
+    }
+    return; // 🚀 STOP HERE (prevents reacting too)
+  }
+
+  // ================= 😄 AUTO-REACT =================
   const triggerCache = getTriggerCache();
 
   for (const item of triggerCache) {
     const keyword = item.keyword.toLowerCase();
 
-    // Match whole word only (no oggg, gogogo, dog)
-    const regex = new RegExp(`\\b${keyword}\\b`, "i");
+    const safeKeyword = escapeRegex(keyword);
+    const regex = new RegExp(`\\b${safeKeyword}\\b`, "i");
 
     if (regex.test(content)) {
       try {
@@ -426,9 +448,7 @@ client.on("messageCreate", async (message) => {
           if (emoji) {
             await message.react(item.emojiId);
           } else {
-            console.warn(
-              `⚠️ Cannot react: Emoji ${item.emojiId} not found in bot's cache.`,
-            );
+            console.warn(`⚠️ Emoji ${item.emojiId} not found in cache.`);
           }
         } else {
           await message.react(item.emojiId);
