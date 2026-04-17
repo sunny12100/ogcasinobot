@@ -443,6 +443,9 @@ const commands = [
         .setMaxValue(5000),
     ),
   new SlashCommandBuilder()
+    .setName("ipl-bet")
+    .setDescription("Get the IPL Betting role to unlock the betting channel"),
+  new SlashCommandBuilder()
     .setName("vip-blackjack")
     .setDescription("Play a hand of Blackjack against the House!")
     .addIntegerOption((opt) =>
