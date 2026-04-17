@@ -431,15 +431,15 @@ const commands = [
         .setMinValue(1) // Updated to 25
         .setMaxValue(5000),
     ),
-  new SlashCommandBuilder()
-    .setName("ipl-match")
-    .setDescription("Admin: Setup a new IPL Betting Panel")
-    .addStringOption((o) =>
-      o.setName("team1").setDescription("Team A (e.g., RCB)").setRequired(true),
-    )
-    .addStringOption((o) =>
-      o.setName("team2").setDescription("Team B (e.g., MI)").setRequired(true),
-    ),
+  // new SlashCommandBuilder()
+  //   .setName("ipl-match")
+  //   .setDescription("Admin: Setup a new IPL Betting Panel")
+  //   .addStringOption((o) =>
+  //     o.setName("team1").setDescription("Team A (e.g., RCB)").setRequired(true),
+  //   )
+  //   .addStringOption((o) =>
+  //     o.setName("team2").setDescription("Team B (e.g., MI)").setRequired(true),
+  //   ),
   new SlashCommandBuilder()
     .setName("vip-highlow")
     .setDescription("Guess if the next card is Higher or Lower!")
@@ -451,9 +451,9 @@ const commands = [
         .setMinValue(1) // Updated to 25
         .setMaxValue(5000),
     ),
-  new SlashCommandBuilder()
-    .setName("ipl-bet")
-    .setDescription("Get the IPL Betting role to unlock the betting channel"),
+  // new SlashCommandBuilder()
+  //   .setName("ipl-bet")
+  //   .setDescription("Get the IPL Betting role to unlock the betting channel"),
   new SlashCommandBuilder()
     .setName("vip-blackjack")
     .setDescription("Play a hand of Blackjack against the House!")

@@ -4,7 +4,6 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits,
 } = require("discord.js");
 const Match = require("../models/Match");
 
@@ -13,32 +12,37 @@ module.exports = {
     .setName("ipl-match")
     .setDescription("Admin: Setup a new IPL Betting Panel")
     .addStringOption((o) =>
-      o.setName("team1").setDescription("Team A (e.g., RCB)").setRequired(true),
+      o.setName("team1").setDescription("Team A").setRequired(true),
     )
     .addStringOption((o) =>
-      o.setName("team2").setDescription("Team B (e.g., MI)").setRequired(true),
+      o.setName("team2").setDescription("Team B").setRequired(true),
     ),
 
   async execute(interaction) {
-    // 1. Role Check - Make sure the role name is EXACT
+    console.log("--- IPL Match Command Started ---");
+
     if (
       !interaction.member.roles.cache.some((r) => r.name === "Casino Manager")
     ) {
+      console.log("Debug: User lacks Casino Manager role.");
       return interaction.reply({
-        content: "❌ You need the **Casino Manager** role to use this.",
+        content: "❌ Restricted to Casino Managers.",
         ephemeral: true,
       });
     }
 
-    // Defer immediately to prevent "Interaction Failed"
     await interaction.deferReply();
+    console.log("Debug: Interaction Deferred.");
 
     try {
       const t1 = interaction.options.getString("team1").toUpperCase();
       const t2 = interaction.options.getString("team2").toUpperCase();
 
-      // 2. Clear old match and create new one in DB
+      console.log(
+        `Debug: Attempting to clear old matches for ${t1} vs ${t2}...`,
+      );
       await Match.deleteMany({});
+      console.log("Debug: Database cleared.");
 
       const newMatch = await Match.create({
         teamA: t1,
@@ -48,14 +52,14 @@ module.exports = {
         potA: 0,
         potB: 0,
       });
+      console.log("Debug: Match created in MongoDB.");
 
       const embed = new EmbedBuilder()
         .setTitle(`🏏 IPL MATCH: ${t1} vs ${t2}`)
         .setDescription(
           `**Status:** 🟢 BETTING OPEN\n\n**${t1} Pot:** 0 gold\n**${t2} Pot:** 0 gold`,
         )
-        .setColor(0x00ff00)
-        .setTimestamp();
+        .setColor(0x00ff00);
 
       const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -76,15 +80,14 @@ module.exports = {
         embeds: [embed],
         components: [buttons],
       });
+      console.log("Debug: Reply sent to Discord.");
 
-      // Save the message ID to the database
       newMatch.messageId = msg.id;
       await newMatch.save();
+      console.log("Debug: Match saved with Message ID. SUCCESS.");
     } catch (error) {
-      console.error("IPL Match Command Error:", error);
-      return interaction.editReply({
-        content: "❌ Database Error! Check your console.",
-      });
+      console.error("CRITICAL ERROR IN IPL-MATCH:", error);
+      return interaction.editReply({ content: `❌ Error: ${error.message}` });
     }
   },
 };
