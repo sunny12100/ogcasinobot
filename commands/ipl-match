@@ -4,7 +4,6 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits,
 } = require("discord.js");
 const Match = require("../models/Match");
 
@@ -20,59 +19,78 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    // 1. Role Check (Adjust name to match your server exactly)
-    if (
-      !interaction.member.roles.cache.some((r) => r.name === "Casino Manager")
-    ) {
-      return interaction.reply({
-        content: "❌ Restricted to Casino Managers.",
-        ephemeral: true,
+    await interaction.deferReply(); // 🔥 prevents interaction failed
+
+    try {
+      // 🔐 Role Check
+      if (
+        !interaction.member.roles.cache.some((r) => r.name === "Casino Manager")
+      ) {
+        return interaction.editReply({
+          content: "❌ Restricted to Casino Managers.",
+        });
+      }
+
+      const t1 = interaction.options.getString("team1").toUpperCase();
+      const t2 = interaction.options.getString("team2").toUpperCase();
+
+      // 🧹 Remove old active matches only
+      await Match.deleteMany({ status: "OPEN" });
+
+      // 🆕 Create new match
+      const newMatch = await Match.create({
+        teamA: t1,
+        teamB: t2,
+        channelId: interaction.channelId,
+        status: "OPEN",
+      });
+
+      // 📊 Embed
+      const embed = new EmbedBuilder()
+        .setTitle(`🏏 IPL MATCH: ${t1} vs ${t2}`)
+        .setDescription(
+          `**Status:** 🟢 BETTING OPEN\n\n**${t1} Pot:** 0 gold\n**${t2} Pot:** 0 gold`,
+        )
+        .setColor(0x00ff00)
+        .setFooter({
+          text: "Zero House Edge | Payouts split by winners",
+        })
+        .setTimestamp();
+
+      // 🔘 Buttons
+      const buttons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`bet_team_a_${newMatch._id}`) // future-proof
+          .setLabel(`Bet ${t1}`)
+          .setStyle(ButtonStyle.Primary),
+
+        new ButtonBuilder()
+          .setCustomId(`bet_team_b_${newMatch._id}`)
+          .setLabel(`Bet ${t2}`)
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId(`lock_match_${newMatch._id}`)
+          .setLabel("🔒 Lock Bets")
+          .setStyle(ButtonStyle.Secondary),
+      );
+
+      // 📩 Send message
+      const msg = await interaction.editReply({
+        embeds: [embed],
+        components: [buttons],
+        fetchReply: true,
+      });
+
+      // 💾 Save message ID
+      newMatch.messageId = msg.id;
+      await newMatch.save();
+    } catch (err) {
+      console.error(err);
+
+      return interaction.editReply({
+        content: "❌ Something went wrong while creating the match.",
       });
     }
-
-    const t1 = interaction.options.getString("team1").toUpperCase();
-    const t2 = interaction.options.getString("team2").toUpperCase();
-
-    // 2. Clear old match and create new one in DB
-    await Match.deleteMany({});
-    const newMatch = await Match.create({
-      teamA: t1,
-      teamB: t2,
-      channelId: interaction.channelId,
-      status: "OPEN",
-    });
-
-    const embed = new EmbedBuilder()
-      .setTitle(`🏏 IPL MATCH: ${t1} vs ${t2}`)
-      .setDescription(
-        `**Status:** 🟢 BETTING OPEN\n\n**${t1} Pot:** 0 gold\n**${t2} Pot:** 0 gold`,
-      )
-      .setColor(0x00ff00)
-      .setFooter({ text: "Zero House Edge | Payouts split by winners" });
-
-    const buttons = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("bet_team_a")
-        .setLabel(`Bet ${t1}`)
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId("bet_team_b")
-        .setLabel(`Bet ${t2}`)
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId("lock_match")
-        .setLabel("🔒 Lock Bets")
-        .setStyle(ButtonStyle.Secondary),
-    );
-
-    const msg = await interaction.reply({
-      embeds: [embed],
-      components: [buttons],
-      fetchReply: true,
-    });
-
-    // Save message ID so we can update the pot numbers later
-    newMatch.messageId = msg.id;
-    await newMatch.save();
   },
 };
