@@ -74,15 +74,18 @@ module.exports = {
         won = false,
         mult = 0;
 
-      if (roll <= 0.5) {
+      if (roll == 0) {
+        // 0.5
         won = true;
         mult = 10;
         r1 = r2 = r3 = "7️⃣";
-      } else if (roll <= 5) {
+      } else if (roll <= 3) {
+        // 5
         won = true;
         mult = 5;
         r1 = r2 = r3 = "💎";
-      } else if (roll <= 40) {
+      } else if (roll <= 30) {
+        // 40
         won = true;
         mult = 1.5;
         const fruit = ["🍒", "🍋", "🍇", "🔔"][Math.floor(Math.random() * 4)];
